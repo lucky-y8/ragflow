@@ -192,7 +192,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
 done < "${TEMPLATE_FILE}"
 
-export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu/"
+export API_PROXY_SCHEME="${API_PROXY_SCHEME:-python}"
 PY=python3
 
 # -----------------------------------------------------------------------------

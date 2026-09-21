@@ -264,6 +264,9 @@ constraint-dependencies = [
     "curl_cffi>=0.15.0"
 ]
 exclude-dependencies = [
+    # akshare pulls py-mini-racer on Linux. It overwrites the py_mini_racer
+    # namespace provided by our direct mini-racer dependency and has no ARM64 wheel.
+    "py-mini-racer",
     # crawl4ai>=0.8.6 depends on unclecode-litellm, which installs the same
     # `litellm` package namespace as upstream litellm and can corrupt imports.
     "unclecode-litellm",

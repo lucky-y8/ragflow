@@ -26,6 +26,10 @@ docker/data/
 docker/oceanbase/
 docker/seekdb/
 
+# ── Local build tools and exported images ─────────────────────────────────
+build/
+ragflow-python-arm64.tar.gz
+
 # ── Go and C++ build outputs ────────────────────────────────────────────────
 internal/binding/cpp/build/
 internal/binding/cpp/cmake-build-release/
