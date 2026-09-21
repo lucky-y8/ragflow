@@ -39,6 +39,10 @@ uv run --python 3.13 --script ragflow_deps/download_deps.py --image-only --archi
 `--image-only` 跳过 Go 原生库下载、解压和 Go 模型检查。
 `--architecture arm64` 只下载 ARM64 的二进制资源，另含共享的模型、NLTK 和 Tika 资源。
 下载失败可以重跑；未完成的普通文件保存在 `.part` 中，不会被当作完整缓存。
+NLTK 语料通过代理直接下载官方固定提交中的 ZIP，并按官方索引校验 SHA-256；
+不调用 `nltk.download()`，因此不会触发其代理下载前的本地 DNS 检查。
+若旧脚本报 `SSRF attempt to restricted IP 0.0.0.0`，同步更新后的
+`ragflow_deps/download_deps.py` 后重跑相同命令，已下载资源会复用。
 
 Chrome 和 ChromeDriver 固定为同版本 `153.0.8010.52`，该版本包含[官方 ARM64 下载](https://googlechromelabs.github.io/chrome-for-testing/)。
 更新版本时需同步 `Dockerfile`、`Dockerfile_base`、`ragflow_deps/Dockerfile`

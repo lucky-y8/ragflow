@@ -4,7 +4,6 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "nltk",
 #   "huggingface-hub"
 # ]
 # ///
@@ -31,14 +30,13 @@
 # is unaffected by where these files live locally.
 
 import argparse
+import hashlib
 import os
 import shutil
 import sys
 import urllib.request
-
-# NLTK >=3.10 refuses proxied downloads (SSRF guard) unless opted in; the
-# runners sit behind a proxy, so allow proxied fetches before importing nltk.
-os.environ.setdefault("NLTK_ALLOW_PROXIED_URLOPEN", "1")
+import zipfile
+from pathlib import Path
 
 # mirrors internal/common.DeepDocORTVersion (Go in-process backend). Single
 # source for the onnxruntime native release: the download URL, .tgz name,
@@ -98,6 +96,52 @@ def get_urls(use_china_mirrors=False, *, image_only=False, architecture="all") -
     return urls
 
 
+# Official nltk_data index.xml at this revision supplies the archive checksums.
+# Fixed URLs work through the build proxy without NLTK's local DNS preflight.
+_NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
+_NLTK_PACKAGES = (
+    # api/validation.py requests omw-1.4; locked NLTK 3.10.3 reads omw-2.0.
+    ("corpora", "omw-2.0", "049c0de0a2d097f6d4d1c97394ea8422bba1faaa30f92e054f18efdb534423ed", False),
+    ("corpora", "omw-1.4", "3b941e664852f3297b6040236626065796a2aaf7d7f9eec8779a3beaa1096c2d", False),
+    ("corpora", "wordnet", "cbda5ea6eef7f36a97a43d4a75f85e07fccbb4f23657d27b4ccbc93e2646ab59", False),
+    ("tokenizers", "punkt", "51c3078994aeaf650bfc8e028be4fb42b4a0d177d41c012b6a983979653660ec", True),
+    ("tokenizers", "punkt_tab", "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106", True),
+)
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_nltk_data(download_dir):
+    for category, name, checksum, unzip in _NLTK_PACKAGES:
+        directory = Path(download_dir) / category
+        directory.mkdir(parents=True, exist_ok=True)
+        archive = directory / f"{name}.zip"
+        if not archive.is_file() or _sha256(archive) != checksum:
+            url = f"https://raw.githubusercontent.com/nltk/nltk_data/{_NLTK_DATA_REVISION}/packages/{category}/{name}.zip"
+            temporary = archive.with_suffix(".zip.part")
+            print(f"Downloading nltk {name} from {url}...")
+            urllib.request.urlretrieve(url, temporary)
+            if _sha256(temporary) != checksum:
+                raise ValueError(f"SHA-256 mismatch for NLTK {name}; incomplete or unexpected archive: {temporary}")
+            temporary.replace(archive)
+        else:
+            print(f"Using verified nltk {name} archive")
+        if unzip:
+            # Re-extract verified tokenizers so interrupted extraction is repaired.
+            with zipfile.ZipFile(archive) as package:
+                destination = (directory / name).resolve()
+                for member in package.infolist():
+                    if not (directory / member.filename).resolve().is_relative_to(destination):
+                        raise ValueError(f"Unexpected path in NLTK {name}: {member.filename}")
+                package.extractall(directory)
+
+
 repos = [
     "InfiniFlow/text_concat_xgb_v1.0",
     "InfiniFlow/deepdoc",
@@ -148,7 +192,6 @@ if __name__ == "__main__":
         native_deps_dir = os.path.expanduser("~/ragflow-native-libs")
         extractions = NATIVE_ARCHIVES
         import tarfile
-        import zipfile
 
         def _prune_stale_onnxruntime(static_lib_dir, version):
             """Remove ONNX Runtime version dirs under static_lib that do NOT match
@@ -212,14 +255,7 @@ if __name__ == "__main__":
         else:
             print(f"  Skipping onnxruntime static check: no .a found under {ort_static_dir}")
 
-    import nltk
-
-    local_dir = os.path.abspath("nltk_data")
-    # NLTK >=3.8.2 gates `wordnet` behind `omw-1.4`; both must be provisioned
-    # or tokenization-backed paths raise LookupError at runtime.
-    for data in ["omw-1.4", "wordnet", "punkt", "punkt_tab"]:
-        print(f"Downloading nltk {data}...")
-        nltk.download(data, download_dir=local_dir, raise_on_error=True)
+    _download_nltk_data(Path("nltk_data"))
 
     for repo_id in repos:
         print(f"Downloading huggingface repo {repo_id}...")
