@@ -133,3 +133,10 @@ bash build.sh --all
 - Collapse duplicate implementations to one path.
 - Drop stale comments and documentation that describe a superseded design.
 - Keep exported APIs only when the current code actually needs them.
+
+## Custom Development Location
+- Place all new project-specific features and their tests, scripts, configuration templates, and documentation under `custom/`.
+- Use `custom/backend_python/` for Python, `custom/backend_go/` for Go, `custom/frontend/` for the frontend, and `custom/docs/` for documentation.
+- Implement only the backend needed for each feature; do not duplicate functionality across languages by default.
+- Keep changes outside `custom/` limited to necessary integration with existing code or fixes to existing behavior. Document required integration points in `custom/docs/`.
+- Do not copy the upstream application into `custom/`; minimize dependencies on upstream internals to make upgrades easier.

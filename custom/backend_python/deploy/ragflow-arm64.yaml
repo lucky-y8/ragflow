@@ -1,0 +1,354 @@
+# GENERATED from k8s/ with kubectl kustomize. Replace placeholders before deployment.
+apiVersion: v1
+data:
+  render_config.py: |
+    """Render the existing RAGFlow local YAML override from deployment environment variables."""
+
+    import json
+    import os
+    import sys
+    from pathlib import Path
+    from urllib.parse import urlsplit
+
+
+    def _value(env, key, default=None, *, allow_empty=False):
+        value = env.get(key, default)
+        if value is None or (not allow_empty and not value.strip()):
+            raise ValueError(f"{key} is required")
+        if "REPLACE_ME" in value:
+            raise ValueError(f"Replace the placeholder in {key}")
+        return value
+
+
+    def _integer(env, key, default, minimum=1, maximum=65535):
+        try:
+            value = int(_value(env, key, str(default)))
+            if not minimum <= value <= maximum:
+                raise ValueError
+        except ValueError:
+            raise ValueError(f"{key} must be an integer in [{minimum}, {maximum}]") from None
+        return value
+
+
+    def _boolean(env, key, default):
+        value = _value(env, key, default).lower()
+        if value not in ("true", "false"):
+            raise ValueError(f"{key} must be true or false")
+        return value == "true"
+
+
+    def _host(env, key):
+        value = _value(env, key)
+        if any(char.isspace() or char in ":/@?#" for char in value):
+            raise ValueError(f"{key} must be a DNS name or IPv4 address, without scheme or port")
+        return value
+
+
+    def _endpoint(value, key):
+        try:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme not in ("http", "https")
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in ("", "/")
+                or parsed.query
+                or parsed.fragment
+                or any(char.isspace() for char in value)
+                or parsed.port == 0
+            ):
+                raise ValueError
+        except ValueError:
+            raise ValueError(f"{key} must be an http(s) endpoint without credentials, path or query") from None
+        return parsed
+
+
+    def build_config(env):
+        for key, expected in (("API_PROXY_SCHEME", "python"), ("DB_TYPE", "mysql"), ("DOC_ENGINE", "elasticsearch")):
+            if _value(env, key, expected) != expected:
+                raise ValueError(f"This deployment requires {key}={expected}")
+
+        mysql = {
+            "name": _value(env, "MYSQL_DBNAME"),
+            "host": _host(env, "MYSQL_HOST"),
+            "port": _integer(env, "MYSQL_PORT", 3306),
+            "user": _value(env, "MYSQL_USER"),
+            "password": _value(env, "MYSQL_PASSWORD"),
+            "max_connections": _integer(env, "MYSQL_MAX_CONNECTIONS", 32, maximum=10000),
+            "stale_timeout": 300,
+            "max_allowed_packet": 1073741824,
+        }
+        redis = {
+            "host": f"{_host(env, 'REDIS_HOST')}:{_integer(env, 'REDIS_PORT', 6379)}",
+            "db": _integer(env, "REDIS_DB", 1, minimum=0, maximum=2147483647),
+            "username": _value(env, "REDIS_USERNAME", "", allow_empty=True),
+            "password": _value(env, "REDIS_PASSWORD", "", allow_empty=True),
+        }
+        if redis["username"] and not redis["password"]:
+            raise ValueError("REDIS_PASSWORD is required when REDIS_USERNAME is set")
+
+        hosts = [value.strip() for value in _value(env, "ES_HOSTS").split(",")]
+        for host in hosts:
+            _endpoint(host, "ES_HOSTS")
+        es = {"hosts": ",".join(hosts), "verify_certs": _boolean(env, "ES_VERIFY_CERTS", "true")}
+        es_user = _value(env, "ES_USER", "", allow_empty=True)
+        es_password = _value(env, "ES_PASSWORD", "", allow_empty=True)
+        if bool(es_user) != bool(es_password):
+            raise ValueError("Set both ES_USER and ES_PASSWORD, or leave both empty")
+        if es_user:
+            es.update(username=es_user, password=es_password)
+
+        storage = _value(env, "STORAGE_IMPL", "MINIO")
+        if storage not in ("MINIO", "AWS_S3"):
+            raise ValueError("STORAGE_IMPL must be MINIO or AWS_S3")
+        endpoint = _value(env, "OBJECT_STORAGE_ENDPOINT")
+        parsed = _endpoint(endpoint, "OBJECT_STORAGE_ENDPOINT")
+        bucket = _value(env, "OBJECT_STORAGE_BUCKET")
+        prefix = _value(env, "OBJECT_STORAGE_PREFIX", "ragflow").strip("/")
+        if not prefix:
+            raise ValueError("OBJECT_STORAGE_PREFIX must contain a non-slash character")
+        access_key = _value(env, "OBJECT_STORAGE_ACCESS_KEY")
+        secret_key = _value(env, "OBJECT_STORAGE_SECRET_KEY")
+        region = _value(env, "OBJECT_STORAGE_REGION", "", allow_empty=True)
+
+        config = {
+            "ragflow": {"host": "0.0.0.0", "http_port": 9380},
+            "mysql": mysql,
+            "redis": redis,
+            "es": es,
+            # Models and provider credentials are configured in the application after startup.
+            "user_default_llm": {},
+        }
+        if storage == "MINIO":
+            config["minio"] = {
+                "host": parsed.netloc,
+                "user": access_key,
+                "password": secret_key,
+                "bucket": bucket,
+                "prefix_path": prefix,
+                "region": region,
+                "secure": parsed.scheme == "https",
+                "verify": True,
+            }
+        else:
+            style = _value(env, "S3_ADDRESSING_STYLE", "path")
+            if style not in ("path", "virtual", "auto"):
+                raise ValueError("S3_ADDRESSING_STYLE must be path, virtual or auto")
+            config["s3"] = {
+                "endpoint_url": endpoint.rstrip("/"),
+                "access_key": access_key,
+                "secret_key": secret_key,
+                "region": region,
+                "bucket": bucket,
+                "prefix_path": prefix,
+                "signature_version": "s3v4",
+                "addressing_style": style,
+            }
+        return config
+
+
+    def write_config(config, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            # JSON is valid YAML. Preserve passwords literally, without shell interpolation.
+            json.dump(config, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        temporary.replace(path)
+
+
+    def main():
+        try:
+            config = build_config(os.environ)
+        except ValueError as error:
+            print(f"Configuration error: {error}", file=sys.stderr)
+            return 1
+        write_config(config, Path("/generated/local.service_conf.yaml"))
+        print("External-service configuration generated.")
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
+kind: ConfigMap
+metadata:
+  name: ragflow-config-renderer-k5k7dgct8f
+  namespace: ragflow
+---
+apiVersion: v1
+data:
+  ES_HOSTS: http://REPLACE_ME_ES_HOST:9200
+  ES_USER: REPLACE_ME_ES_USER
+  ES_VERIFY_CERTS: "true"
+  MYSQL_DBNAME: REPLACE_ME_DATABASE
+  MYSQL_HOST: REPLACE_ME_MYSQL_HOST
+  MYSQL_MAX_CONNECTIONS: "32"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: REPLACE_ME_MYSQL_USER
+  OBJECT_STORAGE_BUCKET: REPLACE_ME_BUCKET
+  OBJECT_STORAGE_ENDPOINT: http://REPLACE_ME_OBJECT_STORAGE_HOST:9000
+  OBJECT_STORAGE_PREFIX: ragflow
+  OBJECT_STORAGE_REGION: us-east-1
+  REDIS_DB: "1"
+  REDIS_HOST: REPLACE_ME_REDIS_HOST
+  REDIS_PORT: "6379"
+  REDIS_USERNAME: ""
+  S3_ADDRESSING_STYLE: path
+kind: ConfigMap
+metadata:
+  name: ragflow-connections-tc4c7hmf7c
+  namespace: ragflow
+---
+apiVersion: v1
+data:
+  API_PROXY_SCHEME: python
+  DB_TYPE: mysql
+  DOC_ENGINE: elasticsearch
+  MAX_CONCURRENT_CHUNK_BUILDERS: "1"
+  MAX_CONCURRENT_TASKS: "1"
+  REGISTER_ENABLED: "1"
+  STORAGE_IMPL: MINIO
+  TZ: Asia/Shanghai
+  USE_DOCLING: "false"
+kind: ConfigMap
+metadata:
+  name: ragflow-runtime-2gtt6tgkt7
+  namespace: ragflow
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: ragflow
+  name: ragflow
+  namespace: ragflow
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: ragflow
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: ragflow
+  name: ragflow
+  namespace: ragflow
+spec:
+  progressDeadlineSeconds: 1200
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ragflow
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragflow
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - --workers=1
+        envFrom:
+        - configMapRef:
+            name: ragflow-runtime-2gtt6tgkt7
+        image: registry.example.com/replace-me/ragflow:python-arm64
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 6
+          httpGet:
+            path: /api/v1/system/ping
+            port: http
+          periodSeconds: 20
+          timeoutSeconds: 5
+        name: ragflow
+        ports:
+        - containerPort: 80
+          name: http
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /api/v1/system/healthz
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 10
+        resources:
+          limits:
+            cpu: "4"
+            memory: 8Gi
+          requests:
+            cpu: "2"
+            memory: 4Gi
+        startupProbe:
+          failureThreshold: 90
+          httpGet:
+            path: /api/v1/system/ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+        volumeMounts:
+        - mountPath: /ragflow/conf/local.service_conf.yaml
+          name: generated-config
+          readOnly: true
+          subPath: local.service_conf.yaml
+        - mountPath: /ragflow/logs
+          name: logs
+        - mountPath: /dev/shm
+          name: browser-shm
+      enableServiceLinks: false
+      initContainers:
+      - command:
+        - /ragflow/.venv/bin/python3
+        - /config-renderer/render_config.py
+        envFrom:
+        - configMapRef:
+            name: ragflow-runtime-2gtt6tgkt7
+        - configMapRef:
+            name: ragflow-connections-tc4c7hmf7c
+        - secretRef:
+            name: ragflow-credentials
+        image: registry.example.com/replace-me/ragflow:python-arm64
+        imagePullPolicy: IfNotPresent
+        name: render-config
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        volumeMounts:
+        - mountPath: /config-renderer
+          name: config-renderer
+          readOnly: true
+        - mountPath: /generated
+          name: generated-config
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        kubernetes.io/os: linux
+      terminationGracePeriodSeconds: 120
+      volumes:
+      - configMap:
+          defaultMode: 292
+          name: ragflow-config-renderer-k5k7dgct8f
+        name: config-renderer
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 8Mi
+        name: generated-config
+      - emptyDir:
+          sizeLimit: 2Gi
+        name: logs
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 512Mi
+        name: browser-shm

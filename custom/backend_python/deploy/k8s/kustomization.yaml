@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Placeholder namespace. Replace with the namespace assigned by the platform.
+# No Namespace object is created by this package.
+namespace: ragflow
+resources:
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  - name: ragflow-runtime
+    envs:
+      - runtime.env
+  - name: ragflow-connections
+    envs:
+      - connections.env
+  - name: ragflow-config-renderer
+    files:
+      - render_config.py
+images:
+  - name: ragflow-python
+    newName: registry.example.com/replace-me/ragflow
+    newTag: python-arm64

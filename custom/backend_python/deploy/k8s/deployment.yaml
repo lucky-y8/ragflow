@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ragflow
+  labels:
+    app.kubernetes.io/name: ragflow
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 1200
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ragflow
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragflow
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: arm64
+      terminationGracePeriodSeconds: 120
+      # If required by the platform, uncomment and use its existing registry Secret.
+      # imagePullSecrets:
+      #   - name: REPLACE_ME_REGISTRY_SECRET
+      initContainers:
+        - name: render-config
+          image: ragflow-python
+          imagePullPolicy: IfNotPresent
+          command: ["/ragflow/.venv/bin/python3", "/config-renderer/render_config.py"]
+          envFrom:
+            - configMapRef:
+                name: ragflow-runtime
+            - configMapRef:
+                name: ragflow-connections
+            - secretRef:
+                name: ragflow-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: config-renderer
+              mountPath: /config-renderer
+              readOnly: true
+            - name: generated-config
+              mountPath: /generated
+      containers:
+        - name: ragflow
+          image: ragflow-python
+          imagePullPolicy: IfNotPresent
+          args: ["--workers=1"]
+          envFrom:
+            - configMapRef:
+                name: ragflow-runtime
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          startupProbe:
+            httpGet:
+              path: /api/v1/system/ping
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          livenessProbe:
+            httpGet:
+              path: /api/v1/system/ping
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /api/v1/system/healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: generated-config
+              mountPath: /ragflow/conf/local.service_conf.yaml
+              subPath: local.service_conf.yaml
+              readOnly: true
+            - name: logs
+              mountPath: /ragflow/logs
+            - name: browser-shm
+              mountPath: /dev/shm
+      volumes:
+        - name: config-renderer
+          configMap:
+            name: ragflow-config-renderer
+            defaultMode: 0444
+        - name: generated-config
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
+        - name: logs
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: browser-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
