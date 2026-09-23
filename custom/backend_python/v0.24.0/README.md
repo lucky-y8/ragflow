@@ -84,6 +84,8 @@ sudo env \
 
 这里必须是 `ubuntu-ports`。参数会替换 Ubuntu 普通、更新和安全仓库的下载地址，保留 Ubuntu 的发行版及签名校验；镜像站同步可能有延迟。参考[清华 Ubuntu Ports 说明](https://mirrors.tuna.tsinghua.edu.cn/help/ubuntu-ports/)。该设置不能修复代理自身的持续故障。之前准备完成的 `.build/` 资源可以复用，无需重新执行 `prepare.sh` 或清理 Builder 缓存。
 
+`graspologic` 是固定提交的 Git 依赖。若日志出现 `curl 92 HTTP/2 stream ... CANCEL`、`early EOF` 或 `invalid index-pack output`，说明 Git 下载连接中断，不能据此判断为 ARM64 编译不支持。Dockerfile 已在 Python 依赖安装层设置 `git config --global http.version HTTP/1.1`；该设置只写入构建阶段容器，不修改宿主机配置，依赖提交及 TLS 校验保持原样。参考 [Git http.version 文档](https://git-scm.com/docs/git-config#Documentation/git-config.txt-httpversion)。更新后使用相同 Builder、APT 镜像源和构建命令重试，已成功的基础层及 uv 下载缓存可继续复用。持续网络故障仍需检查代理链路。
+
 默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。这里只确认依赖可解析，尚不保证该硬件能完成这一版全量构建。
 
 不要只运行目录外旧的 `docker/build_python_arm64.sh`；本版本要运行本目录的 `build.sh`，由它传入固定源码、专用锁文件与资源。若需自定义镜像名，构建和自检都传入相同 `RAGFLOW_IMAGE`。

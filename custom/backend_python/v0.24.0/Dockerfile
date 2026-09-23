@@ -143,6 +143,8 @@ RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
     else \
         sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
     fi; \
+    # uv 的 Git 依赖由 git 子进程拉取；构建阶段使用 HTTP/1.1 避开代理的 HTTP/2 流中断。
+    git config --global http.version HTTP/1.1 && \
     uv sync --python 3.12.12 --frozen --no-dev && \
     # 保留原版在运行时安装扩展依赖所需的 pip。
     .venv/bin/python3 -m ensurepip --upgrade
