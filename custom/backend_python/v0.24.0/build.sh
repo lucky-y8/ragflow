@@ -19,6 +19,12 @@ proxy_args=()
 if [[ -n "$proxy" ]]; then
     proxy_args=(--build-arg "http_proxy=$proxy" --build-arg "https_proxy=$proxy")
 fi
+# 软件源只接受不含认证信息的 HTTP(S) 地址，避免错误替换源文件。
+apt_mirror="${RAGFLOW_APT_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
+if [[ ! "$apt_mirror" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]+)?/?$ ]]; then
+    echo "RAGFLOW_APT_MIRROR 必须是完整的 HTTP(S) 软件源地址。" >&2
+    exit 1
+fi
 docker buildx inspect "$BUILDER" --bootstrap
 # 主上下文是固定提交源码；packaging 是本目录，资源上下文替代在线依赖镜像。
 docker buildx build --builder "$BUILDER" --platform linux/arm64 --provenance=false --load \
@@ -27,6 +33,7 @@ docker buildx build --builder "$BUILDER" --platform linux/arm64 --provenance=fal
     --build-context "infiniflow/ragflow_deps:latest=$RESOURCE_DIR" \
     --build-arg "NODE_BUILD_MAX_OLD_SPACE_SIZE=${NODE_BUILD_MAX_OLD_SPACE_SIZE:-4096}" \
     --build-arg "UV_CONCURRENT_BUILDS=${UV_CONCURRENT_BUILDS:-1}" \
+    --build-arg "UBUNTU_APT_MIRROR=$apt_mirror" \
     "${proxy_args[@]}" --tag "$IMAGE" "$SOURCE_DIR"
 [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE")" == linux/arm64 ]]
 echo "镜像已构建：$IMAGE；下一步执行 bash smoke_test.sh。"

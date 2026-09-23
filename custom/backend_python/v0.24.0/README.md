@@ -46,7 +46,7 @@ v0.24.0/
 cd ~/Desktop/workcode/ragflow/custom/backend_python/v0.24.0
 uname -m
 # 应为 aarch64。需要 git、curl、tar、sha256sum、bash、realpath 和可用网络。
-env RAGFLOW_BUILD_PROXY='http://192.168.229.39:7890' bash prepare.sh
+env RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' bash prepare.sh
 ```
 
 不需要在宿主机安装整套 RAGFlow。脚本下载独立的 uv 0.9.16（校验官方 SHA-256），用它管理 Python 3.12.12 和下载脚本依赖。这里不调用旧版 `nltk.download()`，不会触发之前遇到的 NLTK 代理 DNS 安全检查。
@@ -57,15 +57,32 @@ env RAGFLOW_BUILD_PROXY='http://192.168.229.39:7890' bash prepare.sh
 
 ## 2. 构建镜像
 
-沿用已经验证可用的 `ragflow-arm64-proxy` Builder 和代理：
+使用已配置新代理的 `ragflow-arm64-proxy-235` Builder（脚本默认值仍为原 Builder，因此这里显式指定）：
 
 ```bash
-sudo env RAGFLOW_BUILD_PROXY='http://192.168.229.39:7890' bash build.sh
+sudo env \
+  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  bash build.sh
 ```
 
 构建成功后输出 `ragflow:v0.24.0-arm64`，并检查镜像架构为 `linux/arm64`。脚本通过本地资源上下文提供模型和二进制文件，不需要下载 `infiniflow/ragflow_deps:latest` 镜像。使用 `--provenance=false --load`，沿用此前 Buildx 0.10.5 / BuildKit 0.12.5 的构建方式。
 
 代理同时用于下载、Buildx 客户端鉴权和构建步骤。Builder 容器自身仍需已有的代理配置；脚本不会创建或修改 Builder。Builder 名称不同时，用 `RAGFLOW_BUILDER` 指定实际名称。
+
+APT 下载配置了 5 次重试、60 秒连接/传输超时和 deb 缓存；更新索引或安装失败会立即退出，不使用 `--fix-missing` 跳过依赖。默认安装证书后使用官方 HTTPS `ubuntu-ports` 源。基础镜像缺少证书，最初的索引更新和证书安装仍使用原 HTTP 源，并同样启用重试。
+
+若 Ubuntu 包下载出现代理 `502 Bad Gateway`，可以单独指定 ARM64 软件源重试（不改变 Python、Node.js 等下载源）：
+
+```bash
+sudo env \
+  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  RAGFLOW_APT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports' \
+  bash build.sh
+```
+
+这里必须是 `ubuntu-ports`。参数会替换 Ubuntu 普通、更新和安全仓库的下载地址，保留 Ubuntu 的发行版及签名校验；镜像站同步可能有延迟。参考[清华 Ubuntu Ports 说明](https://mirrors.tuna.tsinghua.edu.cn/help/ubuntu-ports/)。该设置不能修复代理自身的持续故障。之前准备完成的 `.build/` 资源可以复用，无需重新执行 `prepare.sh` 或清理 Builder 缓存。
 
 默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。这里只确认依赖可解析，尚不保证该硬件能完成这一版全量构建。
 

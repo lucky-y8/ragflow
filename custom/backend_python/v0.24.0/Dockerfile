@@ -6,6 +6,8 @@ USER root
 SHELL ["/bin/bash", "-c"]
 
 ARG NEED_MIRROR=0
+# ARM64 使用 ubuntu-ports；此参数只替换 Ubuntu APT 源。
+ARG UBUNTU_APT_MIRROR=https://ports.ubuntu.com/ubuntu-ports
 
 WORKDIR /ragflow
 
@@ -26,30 +28,31 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps 
 ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard-3.2.3.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 系统依赖：文档解析、OCR、浏览器、字体和数据库客户端。
+# 系统依赖：下载失败最多重试 5 次，缓存已下载的 deb，安装失败立即停止。
 RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
-    apt update && \
-    apt --no-install-recommends install -y ca-certificates; \
-    if [ "$NEED_MIRROR" == "1" ]; then \
-        sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
-        sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
-    fi; \
-    rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    chmod 1777 /tmp && \
-    apt update && \
-    apt install -y libglib2.0-0 libglx-mesa0 libgl1 && \
-    apt install -y pkg-config libicu-dev libgdiplus && \
-    apt install -y default-jdk && \
-    apt install -y libatk-bridge2.0-0 && \
-    apt install -y libpython3-dev libgtk-4-1 libnss3 libasound2t64 xdg-utils libgbm-dev zlib1g-dev && \
-    apt install -y libjemalloc-dev && \
-    apt install -y gnupg unzip curl wget git vim less && \
-    apt install -y ghostscript && \
-    apt install -y pandoc && \
-    apt install -y texlive && \
-    apt install -y fonts-freefont-ttf fonts-noto-cjk && \
-    apt install -y postgresql-client
+    set -eu; \
+    rm -f /etc/apt/apt.conf.d/docker-clean; \
+    printf '%s\n' 'Acquire::Retries "5";' \
+        'Acquire::http::Timeout "60";' 'Acquire::https::Timeout "60";' \
+        'APT::Update::Error-Mode "any";' \
+        'APT::Keep-Downloaded-Packages "true";' \
+        'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+        > /etc/apt/apt.conf.d/80ragflow-downloads; \
+    chmod 1777 /tmp; \
+    # Ubuntu 基础镜像需要先从原 HTTP 源安装证书，再启用 HTTPS 镜像源。 \
+    apt-get update; \
+    apt-get --no-install-recommends install -y ca-certificates; \
+    # 仅修改 URI，保留 noble、更新/安全仓库、组件及 Ubuntu 签名校验配置。 \
+    mirror="${UBUNTU_APT_MIRROR%/}"; \
+    sed -i -E "s|https?://ports\.ubuntu\.com/ubuntu-ports/?|${mirror}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources; \
+    apt-get update; \
+    apt-get install -y \
+        libglib2.0-0 libglx-mesa0 libgl1 pkg-config libicu-dev libgdiplus \
+        default-jdk libatk-bridge2.0-0 libpython3-dev libgtk-4-1 libnss3 \
+        libasound2t64 xdg-utils libgbm-dev zlib1g-dev libjemalloc-dev \
+        gnupg unzip curl wget git vim less ghostscript pandoc texlive \
+        fonts-freefont-ttf fonts-noto-cjk postgresql-client
 
 ARG NGINX_VERSION=1.29.5-1~noble
 RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
