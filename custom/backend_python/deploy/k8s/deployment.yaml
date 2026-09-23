@@ -1,3 +1,4 @@
+# Python ARM64 应用部署：复用现有镜像，通过初始化容器生成外部服务连接配置。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,10 +6,13 @@ metadata:
   labels:
     app.kubernetes.io/name: ragflow
 spec:
+  # 初次联调使用单副本；尚未配置多副本高可用和自动扩缩容。
   replicas: 1
   revisionHistoryLimit: 2
+  # 部署进度超时为 20 分钟；启动探针单独预留约 15 分钟。
   progressDeadlineSeconds: 1200
   strategy:
+    # 更新时先停止旧 Pod，再启动新 Pod，会有短暂停服，应安排维护窗口。
     type: Recreate
   selector:
     matchLabels:
@@ -18,17 +22,24 @@ spec:
       labels:
         app.kubernetes.io/name: ragflow
     spec:
+      # 应用不需要访问 Kubernetes API，因此不自动挂载服务账号令牌。
       automountServiceAccountToken: false
+      # 不自动注入集群 Service 的环境变量，应用参数由下方 ConfigMap 明确提供。
       enableServiceLinks: false
+      # 镜像是 Linux ARM64，仅调度到对应架构的节点。
       nodeSelector:
         kubernetes.io/os: linux
         kubernetes.io/arch: arm64
+      # 终止宽限为 120 秒；现有入口不保证排空任务，升级前应等待解析任务结束。
       terminationGracePeriodSeconds: 120
-      # If required by the platform, uncomment and use its existing registry Secret.
+      # 私有仓库需要拉取凭据时，取消下方注释并填写平台已有的仓库 Secret 名称。
+      # 此 Secret 必须在同一 namespace；它与中间件密码 Secret 不同。
       # imagePullSecrets:
       #   - name: REPLACE_ME_REGISTRY_SECRET
       initContainers:
+        # 在应用启动前执行一次，将环境变量和 Secret 转换成应用可读的配置文件。
         - name: render-config
+          # 此名称由 kustomization.yaml 替换成实际仓库地址，初始化和应用镜像保持一致。
           image: ragflow-python
           imagePullPolicy: IfNotPresent
           command: ["/ragflow/.venv/bin/python3", "/config-renderer/render_config.py"]
@@ -39,6 +50,7 @@ spec:
                 name: ragflow-connections
             - secretRef:
                 name: ragflow-credentials
+          # 初始化只生成配置，不启动 API 或解析任务，资源额度较小。
           resources:
             requests:
               cpu: 100m
@@ -56,13 +68,17 @@ spec:
         - name: ragflow
           image: ragflow-python
           imagePullPolicy: IfNotPresent
+          # 保留镜像默认入口，启动 Python API、Nginx、数据同步进程和一个任务执行器。
           args: ["--workers=1"]
+          # 主容器仅注入运行参数；连接参数和密码从挂载的配置文件读取。
+          # 不要额外注入连接 Secret，以免原始入口再次渲染模板时改变密码内容。
           envFrom:
             - configMapRef:
                 name: ragflow-runtime
           ports:
             - name: http
               containerPort: 80
+          # 联调起始值：请求 2 CPU / 4 GiB，上限 4 CPU / 8 GiB；按平台额度和实测调整。
           resources:
             requests:
               cpu: "2"
@@ -70,6 +86,7 @@ spec:
             limits:
               cpu: "4"
               memory: 8Gi
+          # 启动探针：每 10 秒检查一次，最多失败 90 次，给初次初始化约 15 分钟。
           startupProbe:
             httpGet:
               path: /api/v1/system/ping
@@ -77,6 +94,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 90
+          # 存活探针只检查 API 能否响应，不因外部中间件故障直接触发容器重启。
           livenessProbe:
             httpGet:
               path: /api/v1/system/ping
@@ -84,6 +102,8 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 6
+          # 就绪探针检查数据库、Redis、文档引擎和存储；失败时从 Service 可用后端中移除。
+          # 当前接口不检查工作进程心跳，部署后还需实际上传一份文档验证解析。
           readinessProbe:
             httpGet:
               path: /api/v1/system/healthz
@@ -92,6 +112,7 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 3
           volumeMounts:
+            # 只覆盖本地配置文件，保留镜像中 conf 目录的其他映射和模型配置。
             - name: generated-config
               mountPath: /ragflow/conf/local.service_conf.yaml
               subPath: local.service_conf.yaml
@@ -101,17 +122,21 @@ spec:
             - name: browser-shm
               mountPath: /dev/shm
       volumes:
+        # 挂载配置生成脚本，只允许读取。
         - name: config-renderer
           configMap:
             name: ragflow-config-renderer
             defaultMode: 0444
+        # 初始化容器写入、主容器读取的共享内存卷；含密码的配置随 Pod 删除。
         - name: generated-config
           emptyDir:
             medium: Memory
             sizeLimit: 8Mi
+        # 临时日志卷，Pod 重建后丢失；长期日志由平台采集和保存。
         - name: logs
           emptyDir:
             sizeLimit: 2Gi
+        # 浏览器共享内存，使用量计入内存消耗；这里不申请持久化存储。
         - name: browser-shm
           emptyDir:
             medium: Memory

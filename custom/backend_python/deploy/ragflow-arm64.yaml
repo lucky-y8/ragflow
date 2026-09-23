@@ -1,8 +1,15 @@
-# GENERATED from k8s/ with kubectl kustomize. Replace placeholders before deployment.
+# Python ARM64 部署合并文件；源文件位于同级 k8s/ 目录，字段说明使用中文。
+# 部署前：替换 namespace、两处镜像地址和全部 REPLACE_ME 连接占位符。
+# 另行创建同 namespace 的 ragflow-credentials Secret，键名见 k8s/credentials.yaml.example。
+# 私有镜像仓库需要认证时，在 Deployment 的 spec.template.spec 中增加 imagePullSecrets。
+# 本文件只部署应用，MySQL、Redis、对象存储和 Elasticsearch 使用平台现有服务。
+# 维护源文件后用 kubectl kustomize 重新生成；普通 YAML/.env 注释不会自动保留在生成结果中。
+# 配置生成脚本：由初始化容器执行，生成 local.service_conf.yaml，无需重新构建应用镜像。
 apiVersion: v1
 data:
+  # 下方内嵌脚本来自 k8s/render_config.py；修改脚本时请更新源文件并重新生成。
   render_config.py: |
-    """Render the existing RAGFlow local YAML override from deployment environment variables."""
+    """读取部署环境变量，生成 RAGFlow 已有机制支持的本地 YAML 覆盖配置。"""
 
     import json
     import os
@@ -12,6 +19,7 @@ data:
 
 
     def _value(env, key, default=None, *, allow_empty=False):
+        """检查必填值和未替换的占位符；异常只指出变量名，不输出密钥值。"""
         value = env.get(key, default)
         if value is None or (not allow_empty and not value.strip()):
             raise ValueError(f"{key} is required")
@@ -38,6 +46,7 @@ data:
 
 
     def _host(env, key):
+        """MySQL 和 Redis 的地址与端口分开填写，这里只接收主机名或 IPv4。"""
         value = _value(env, key)
         if any(char.isspace() or char in ":/@?#" for char in value):
             raise ValueError(f"{key} must be a DNS name or IPv4 address, without scheme or port")
@@ -45,6 +54,7 @@ data:
 
 
     def _endpoint(value, key):
+        """校验 ES 和存储完整地址；账号密码必须单独传入，不能嵌在 URL 中。"""
         try:
             parsed = urlsplit(value)
             if (
@@ -65,6 +75,7 @@ data:
 
 
     def build_config(env):
+        """把平台环境变量映射成当前 Python 后端实际读取的配置字段。"""
         for key, expected in (("API_PROXY_SCHEME", "python"), ("DB_TYPE", "mysql"), ("DOC_ENGINE", "elasticsearch")):
             if _value(env, key, expected) != expected:
                 raise ValueError(f"This deployment requires {key}={expected}")
@@ -117,9 +128,10 @@ data:
             "mysql": mysql,
             "redis": redis,
             "es": es,
-            # Models and provider credentials are configured in the application after startup.
+            # 模型和供应商凭据在应用启动后通过界面配置，不继承镜像中的示例模型地址。
             "user_default_llm": {},
         }
+        # 两种存储客户端的字段不同；MinIO 拆出协议开关，S3 保留完整 endpoint。
         if storage == "MINIO":
             config["minio"] = {
                 "host": parsed.netloc,
@@ -149,17 +161,19 @@ data:
 
 
     def write_config(config, path):
+        """用 0600 权限写入临时文件后替换目标，避免应用读取半写入的密码配置。"""
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            # JSON is valid YAML. Preserve passwords literally, without shell interpolation.
+            # JSON 可被现有 YAML 读取器解析；原样保存密码，不经过 Shell 插值或拼接。
             json.dump(config, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         temporary.replace(path)
 
 
     def main():
+        """由初始化容器执行；配置错误时退出，阻止主应用带着错误参数启动。"""
         try:
             config = build_config(os.environ)
         except ValueError as error:
@@ -174,55 +188,91 @@ data:
         sys.exit(main())
 kind: ConfigMap
 metadata:
-  name: ragflow-config-renderer-k5k7dgct8f
+  name: ragflow-config-renderer-tdhg4fd7kc
+  # 替换为平台分配的命名空间，所有资源和 Secret 必须一致。
   namespace: ragflow
 ---
+# 外部服务连接参数：仅初始化容器读取；替换 REPLACE_ME 占位符，密码单独存放在 Secret 中。
 apiVersion: v1
 data:
+  # Elasticsearch 完整地址，包含 http:// 或 https:// 和端口；多个节点用逗号分隔。
   ES_HOSTS: http://REPLACE_ME_ES_HOST:9200
+  # Elasticsearch 用户名；无认证时，此项和 Secret 中 ES_PASSWORD 必须同时留空。
   ES_USER: REPLACE_ME_ES_USER
+  # HTTPS 连接是否校验服务端证书，默认 true；内部 CA 的处理见部署说明。
   ES_VERIFY_CERTS: "true"
+  # 平台预先创建的数据库名称。
   MYSQL_DBNAME: REPLACE_ME_DATABASE
+  # MySQL 主机名或 IPv4 地址，不含 http://、端口或数据库名称。
   MYSQL_HOST: REPLACE_ME_MYSQL_HOST
+  # 单个进程的连接池上限；API 和各工作进程分别维护连接池，总数可能超过此值。
   MYSQL_MAX_CONNECTIONS: "32"
+  # 平台提供的 MySQL 端口，默认 3306，可按实际情况修改。
   MYSQL_PORT: "3306"
+  # 具备该数据库建表、变更表和读写权限的账号。
   MYSQL_USER: REPLACE_ME_MYSQL_USER
+  # 平台预先创建的桶名称，应用凭据需要拥有该桶的相应访问权限。
   OBJECT_STORAGE_BUCKET: REPLACE_ME_BUCKET
+  # 对象存储完整服务地址，包含协议和实际端口，不要在地址后追加桶名。
+  # https:// 会启用 TLS；MinIO 分支默认校验证书。
   OBJECT_STORAGE_ENDPOINT: http://REPLACE_ME_OBJECT_STORAGE_HOST:9000
+  # 对象键的公共前缀，用于区分应用数据；此模板要求非空。
   OBJECT_STORAGE_PREFIX: ragflow
+  # 存储服务所在区域，按平台要求填写；当前值仅为常见示例。
   OBJECT_STORAGE_REGION: us-east-1
+  # 应用专用逻辑数据库编号；平台只允许 DB 0 时改成 0。
   REDIS_DB: "1"
+  # Redis 单地址连接：填写主机名或 IPv4，不含协议和端口。
+  # 当前模板不支持 Redis TLS、Sentinel 哨兵和 Redis Cluster 集群。
   REDIS_HOST: REPLACE_ME_REDIS_HOST
+  # Redis 实际服务端口。
   REDIS_PORT: "6379"
+  # Redis ACL 用户名；平台未配置用户名时留空。
   REDIS_USERNAME: ""
+  # 仅 STORAGE_IMPL=AWS_S3 时使用：path 为路径寻址，virtual 为虚拟主机寻址。
   S3_ADDRESSING_STYLE: path
 kind: ConfigMap
 metadata:
   name: ragflow-connections-tc4c7hmf7c
+  # 替换为平台分配的命名空间，所有资源和 Secret 必须一致。
   namespace: ragflow
 ---
+# 应用运行参数：初始化容器和应用容器共同读取，固定使用 Python 后端。
 apiVersion: v1
 data:
+  # 应用运行参数：初始化容器和主容器共同使用，不要在这里填写密码或密钥。
+  # 固定启动 Python 后端，对应镜像内的 Python Nginx 路由配置。
   API_PROXY_SCHEME: python
+  # 元数据数据库类型；当前部署模板仅配置 MySQL。
   DB_TYPE: mysql
+  # 文档索引和检索引擎；当前部署模板仅配置 Elasticsearch。
   DOC_ENGINE: elasticsearch
+  # 分块构建和嵌入操作的并发上限，首次联调用 1。
   MAX_CONCURRENT_CHUNK_BUILDERS: "1"
+  # 单个工作进程的任务并发上限；首次联调用 1，后续根据实测资源情况调整。
   MAX_CONCURRENT_TASKS: "1"
+  # 是否允许注册：1 为开启，0 为关闭。首次创建账号后可按平台要求关闭。
   REGISTER_ENABLED: "1"
+  # 对象存储类型：MinIO 填 MINIO，其他兼容 S3 的服务填 AWS_S3，不能填 S3。
   STORAGE_IMPL: MINIO
+  # 容器时区。
   TZ: Asia/Shanghai
+  # 是否启用可选的 Docling 解析器；false 避免入口在启动时安装该额外依赖。
   USE_DOCLING: "false"
 kind: ConfigMap
 metadata:
   name: ragflow-runtime-2gtt6tgkt7
+  # 替换为平台分配的命名空间，所有资源和 Secret 必须一致。
   namespace: ragflow
 ---
+# 集群内访问入口：Nginx 的 80 端口同时提供前端和 API，外部域名及 TLS 由平台配置。
 apiVersion: v1
 kind: Service
 metadata:
   labels:
     app.kubernetes.io/name: ragflow
   name: ragflow
+  # 替换为平台分配的命名空间，所有资源和 Secret 必须一致。
   namespace: ragflow
 spec:
   ports:
@@ -233,36 +283,44 @@ spec:
     app.kubernetes.io/name: ragflow
   type: ClusterIP
 ---
+# 应用工作负载：一个副本，仅在 Linux ARM64 节点运行，沿用镜像默认入口。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
     app.kubernetes.io/name: ragflow
   name: ragflow
+  # 替换为平台分配的命名空间，所有资源和 Secret 必须一致。
   namespace: ragflow
 spec:
   progressDeadlineSeconds: 1200
+  # 单副本联调；调整副本数前需验证多实例运行方式。
   replicas: 1
   revisionHistoryLimit: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: ragflow
   strategy:
+    # 升级先停止旧 Pod，再创建新 Pod，期间会短暂停服。
     type: Recreate
   template:
     metadata:
       labels:
         app.kubernetes.io/name: ragflow
     spec:
+      # 不自动挂载 Kubernetes API 访问令牌。
       automountServiceAccountToken: false
+      # 应用容器保留默认入口，启动 Python API、Nginx、数据同步及任务执行器。
       containers:
       - args:
         - --workers=1
         envFrom:
         - configMapRef:
             name: ragflow-runtime-2gtt6tgkt7
+        # 替换为平台仓库内的实际 ARM64 镜像，两个容器使用同一版本。
         image: registry.example.com/replace-me/ragflow:python-arm64
         imagePullPolicy: IfNotPresent
+        # 存活探针检查 API 是否响应；连续失败达到阈值会重启容器。
         livenessProbe:
           failureThreshold: 6
           httpGet:
@@ -274,6 +332,7 @@ spec:
         ports:
         - containerPort: 80
           name: http
+        # 就绪探针检查外部依赖；失败时停止通过 Service 向此 Pod 分配流量。
         readinessProbe:
           failureThreshold: 3
           httpGet:
@@ -281,6 +340,7 @@ spec:
             port: http
           periodSeconds: 30
           timeoutSeconds: 10
+        # requests 为调度资源请求，limits 为资源使用上限，按平台配额调整。
         resources:
           limits:
             cpu: "4"
@@ -288,6 +348,7 @@ spec:
           requests:
             cpu: "2"
             memory: 4Gi
+        # 启动探针预留约 15 分钟，等待首次初始化完成。
         startupProbe:
           failureThreshold: 90
           httpGet:
@@ -299,12 +360,14 @@ spec:
         - mountPath: /ragflow/conf/local.service_conf.yaml
           name: generated-config
           readOnly: true
+          # 仅挂载单个覆盖文件，保留镜像 conf 目录中的其他文件。
           subPath: local.service_conf.yaml
         - mountPath: /ragflow/logs
           name: logs
         - mountPath: /dev/shm
           name: browser-shm
       enableServiceLinks: false
+      # 先把连接参数和密码转换成配置，再启动主容器。
       initContainers:
       - command:
         - /ragflow/.venv/bin/python3
@@ -316,9 +379,11 @@ spec:
             name: ragflow-connections-tc4c7hmf7c
         - secretRef:
             name: ragflow-credentials
+        # 替换为平台仓库内的实际 ARM64 镜像，两个容器使用同一版本。
         image: registry.example.com/replace-me/ragflow:python-arm64
         imagePullPolicy: IfNotPresent
         name: render-config
+        # requests 为调度资源请求，limits 为资源使用上限，按平台配额调整。
         resources:
           limits:
             cpu: 500m
@@ -332,14 +397,16 @@ spec:
           readOnly: true
         - mountPath: /generated
           name: generated-config
+      # 选择与镜像架构匹配的 Linux ARM64 节点。
       nodeSelector:
         kubernetes.io/arch: arm64
         kubernetes.io/os: linux
       terminationGracePeriodSeconds: 120
+      # 使用临时卷；配置和日志随 Pod 删除，业务数据由外部服务持久化。
       volumes:
       - configMap:
           defaultMode: 292
-          name: ragflow-config-renderer-k5k7dgct8f
+          name: ragflow-config-renderer-tdhg4fd7kc
         name: config-renderer
       - emptyDir:
           medium: Memory

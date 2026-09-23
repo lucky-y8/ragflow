@@ -1,0 +1,13 @@
+# 下载源码、模型、构建缓存和实际密码不进入版本控制。
+.build/
+__pycache__/
+**/__pycache__/
+k8s/credentials.local.yaml
+*.tar
+*.tar.gz
+*.sha256
+
+# 本包的锁定依赖是交付文件，覆盖仓库对 build/ 的全局忽略规则。
+!build/
+!build/pyproject.toml
+!build/uv.lock

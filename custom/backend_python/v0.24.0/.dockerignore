@@ -1,0 +1,7 @@
+.build
+.git
+**/__pycache__
+k8s
+tests
+*.tar
+*.tar.gz

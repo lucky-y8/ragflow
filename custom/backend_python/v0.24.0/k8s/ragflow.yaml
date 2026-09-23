@@ -1,0 +1,168 @@
+# RAGFlow v0.24.0 / Linux ARM64 部署文件，所有普通环境变量集中在两个 ConfigMap 中。
+# 请统一替换各资源的 namespace、两处镜像地址和 REPLACE_ME 参数；无需 Kustomize。
+# 本模板不创建 namespace 或中间件，密码由同 namespace 的 ragflow-v0240-credentials 提供。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ragflow-v0240-runtime
+  namespace: ragflow-v0240
+data:
+  # 该版本默认就是 Python 后端，不需要当前开发版的 API_PROXY_SCHEME 参数。
+  DB_TYPE: "mysql"
+  DOC_ENGINE: "elasticsearch"
+  # MINIO 仅用于 HTTP；HTTPS 对象存储使用 AWS_S3（包括 MinIO 的 S3 接口）。
+  STORAGE_IMPL: "MINIO"
+  TZ: "Asia/Shanghai"
+  # 首次注册账号时使用 1，后续按平台要求改成 0。
+  REGISTER_ENABLED: "1"
+  # 关闭可选 Docling，避免启动时额外下载依赖。
+  USE_DOCLING: "false"
+  MAX_CONCURRENT_TASKS: "1"
+  MAX_CONCURRENT_CHUNK_BUILDERS: "1"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ragflow-v0240-connections
+  namespace: ragflow-v0240
+data:
+  # MySQL 地址不包含协议和端口；使用为该版本准备的独立数据库。
+  MYSQL_HOST: "REPLACE_ME_MYSQL_HOST"
+  MYSQL_PORT: "3306"
+  MYSQL_DBNAME: "REPLACE_ME_DATABASE"
+  MYSQL_USER: "REPLACE_ME_MYSQL_USER"
+  # 每个应用进程各有一个连接池，总连接数可能大于此值。
+  MYSQL_MAX_CONNECTIONS: "32"
+  # Redis 为单地址、无 TLS 模式；不支持 Cluster 或 Sentinel，使用独立逻辑 DB。
+  REDIS_HOST: "REPLACE_ME_REDIS_HOST"
+  REDIS_PORT: "6379"
+  REDIS_DB: "1"
+  REDIS_USERNAME: ""
+  # ES 完整 URL，多个地址可用逗号分隔；默认校验 HTTPS 证书。
+  ES_HOSTS: "http://REPLACE_ME_ES_HOST:9200"
+  ES_USER: "REPLACE_ME_ES_USER"
+  ES_VERIFY_CERTS: "true"
+  # 存储地址包含协议、端口，不追加桶路径；HTTPS 需将 STORAGE_IMPL 改为 AWS_S3。
+  OBJECT_STORAGE_ENDPOINT: "http://REPLACE_ME_OBJECT_STORAGE_HOST:9000"
+  # 桶必须由平台预先创建，使用专属前缀区分该版本数据。
+  OBJECT_STORAGE_BUCKET: "REPLACE_ME_BUCKET"
+  OBJECT_STORAGE_PREFIX: "ragflow-v0240"
+  # 按平台填写区域，适配器映射到 v0.24.0 的 s3.region_name。
+  OBJECT_STORAGE_REGION: "us-east-1"
+  S3_ADDRESSING_STYLE: "path"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ragflow-v0240
+  namespace: ragflow-v0240
+spec:
+  # 单副本联调；升级会短暂停服，应等正在解析的任务结束后再更新。
+  replicas: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 1200
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ragflow-v0240
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragflow-v0240
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: arm64
+      terminationGracePeriodSeconds: 120
+      # 私有仓库有需要时取消注释，填写平台已创建的仓库凭据 Secret。
+      # imagePullSecrets:
+      #   - name: REPLACE_ME_REGISTRY_SECRET
+      initContainers:
+        # 脚本已打包在本版本镜像中，将环境变量和 Secret 转换成安全的 JSON/YAML 配置。
+        - name: render-config
+          image: registry.example.com/replace-me/ragflow:v0.24.0-arm64
+          imagePullPolicy: IfNotPresent
+          command: ["/ragflow/.venv/bin/python3", "/opt/ragflow-deploy/render_config.py"]
+          envFrom:
+            - configMapRef:
+                name: ragflow-v0240-runtime
+            - configMapRef:
+                name: ragflow-v0240-connections
+            - secretRef:
+                name: ragflow-v0240-credentials
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - name: generated-config
+              mountPath: /generated
+      containers:
+        - name: ragflow
+          # 必须与初始化容器使用同一版本；这里不能填之前构建的开发版镜像。
+          image: registry.example.com/replace-me/ragflow:v0.24.0-arm64
+          imagePullPolicy: IfNotPresent
+          args: ["--workers=1"]
+          # 连接 Secret 只注入初始化容器，主容器从生成的配置文件读取。
+          envFrom:
+            - configMapRef:
+                name: ragflow-v0240-runtime
+          ports:
+            - name: http
+              containerPort: 80
+          # 联调起始配置，OCR/大文件的实际内存需求需通过平台负载测试确定。
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          # 注意旧版路径是 /v1/system/...，不是 /api/v1/system/...。
+          startupProbe:
+            httpGet: {path: /v1/system/ping, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          livenessProbe:
+            httpGet: {path: /v1/system/ping, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # 旧版 healthz 对对象存储的判断有局限，仍须实际上传文件验收，详见 README。
+          readinessProbe:
+            httpGet: {path: /v1/system/healthz, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            # 只覆盖一个文件，保留镜像原有 conf 目录其他内容。
+            - name: generated-config
+              mountPath: /ragflow/conf/local.service_conf.yaml
+              subPath: local.service_conf.yaml
+              readOnly: true
+            - name: logs
+              mountPath: /ragflow/logs
+            - name: browser-shm
+              mountPath: /dev/shm
+      volumes:
+        # 包含密钥的配置仅保留在 Pod 内存卷中；更新配置后需重建 Pod。
+        - name: generated-config
+          emptyDir: {medium: Memory, sizeLimit: 8Mi}
+        - name: logs
+          emptyDir: {sizeLimit: 2Gi}
+        - name: browser-shm
+          emptyDir: {medium: Memory, sizeLimit: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ragflow-v0240
+  namespace: ragflow-v0240
+spec:
+  # 集群内访问入口；域名、Ingress 和外部 TLS 由平台配置。
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ragflow-v0240
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

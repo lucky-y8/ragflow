@@ -1,11 +1,15 @@
+# 合并部署文件的入口：在仓库根目录执行 kubectl kustomize custom/backend_python/deploy/k8s。
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Placeholder namespace. Replace with the namespace assigned by the platform.
-# No Namespace object is created by this package.
+# ragflow 是示例命名空间，替换为平台分配的已存在 namespace；本模板不创建命名空间。
 namespace: ragflow
+# 只部署应用和访问 Service，不创建 MySQL、Redis、对象存储或 Elasticsearch。
 resources:
   - deployment.yaml
   - service.yaml
+# 将环境变量文件和配置生成脚本转换为 ConfigMap。
+# 名称默认带内容哈希；配置改变后，Deployment 引用同步改变并触发新 Pod。
+# 密码单独通过 ragflow-credentials Secret 提供，不加入 ConfigMap。
 configMapGenerator:
   - name: ragflow-runtime
     envs:
@@ -16,7 +20,11 @@ configMapGenerator:
   - name: ragflow-config-renderer
     files:
       - render_config.py
+# 将 Deployment 内的 ragflow-python 同时替换为平台仓库中的镜像地址。
+# 初始化容器和应用容器使用同一个已经构建的 ARM64 镜像。
 images:
   - name: ragflow-python
+    # 替换为实际仓库地址和项目路径，不包含 :tag。
     newName: registry.example.com/replace-me/ragflow
+    # 替换为平台已导入或已推送的镜像版本标签。
     newTag: python-arm64

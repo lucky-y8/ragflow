@@ -12,6 +12,8 @@
 - `custom/backend_python/deploy/k8s/runtime.env`：Python 后端、存储类型、时区等应用参数。
 - `custom/backend_python/deploy/k8s/kustomization.yaml`：namespace 和镜像地址的统一入口。
 
+部署 YAML、环境变量、Secret 示例和配置脚本均已补充中文注释，说明字段用途、填写格式及可调整项。Kustomize 合并时不会自动保留普通 YAML/环境变量文件中的注释，重新生成后可对照 `k8s/` 源文件阅读完整说明。
+
 推荐维护 `k8s/` 源文件，然后重新生成合并 YAML。平台只接受 YAML 时，可以直接填写合并文件；此时后续重新生成会覆盖这些手工修改，需要同时更新源文件。不要把 `.env` 文件当 Shell 脚本执行；它们由 Kustomize 读取，值不加引号。
 
 ## 需要替换的信息

@@ -4,9 +4,11 @@ import json
 import os
 import stat
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime"))
 from render_config import build_config, write_config
 
 
@@ -19,7 +21,7 @@ def environment():
         "REDIS_HOST": "redis.internal",
         "REDIS_PASSWORD": "",
         "ES_HOSTS": "https://es.internal:9243",
-        "OBJECT_STORAGE_ENDPOINT": "https://objects.internal:9443",
+        "OBJECT_STORAGE_ENDPOINT": "http://objects.internal:9000",
         "OBJECT_STORAGE_BUCKET": "ragflow-test",
         "OBJECT_STORAGE_ACCESS_KEY": "test-access-key",
         "OBJECT_STORAGE_SECRET_KEY": "test-secret-key",
@@ -36,9 +38,8 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertEqual(config["redis"]["password"], "")
         self.assertNotIn("username", config["es"])
         self.assertTrue(config["es"]["verify_certs"])
-        self.assertEqual(config["minio"]["host"], "objects.internal:9443")
-        self.assertTrue(config["minio"]["secure"])
-        self.assertTrue(config["minio"]["verify"])
+        self.assertEqual(config["minio"]["host"], "objects.internal:9000")
+        self.assertNotIn("secure", config["minio"])
 
     def test_s3_single_bucket_preserves_prefix_and_uses_sdk_signature(self):
         env = environment() | {"STORAGE_IMPL": "AWS_S3", "OBJECT_STORAGE_PREFIX": "/tenant-a/"}
@@ -69,6 +70,15 @@ class DeploymentConfigTests(unittest.TestCase):
             write_config(build_config(environment()), path)
             self.assertNotIn(secret, path.read_text(encoding="utf-8"))
             self.assertFalse(path.with_name(path.name + ".tmp").exists())
+
+    def test_v0240_minio_rejects_https_and_s3_uses_region_name(self):
+        env = environment() | {"OBJECT_STORAGE_ENDPOINT": "https://objects.internal:9443", "OBJECT_STORAGE_REGION": "test-region"}
+        with self.assertRaisesRegex(ValueError, "AWS_S3"):
+            build_config(env)
+        config = build_config(env | {"STORAGE_IMPL": "AWS_S3"})
+        self.assertEqual(config["s3"]["region_name"], "test-region")
+        self.assertEqual(config["s3"]["endpoint_url"], "https://objects.internal:9443")
+        self.assertNotIn("region", config["s3"])
 
     def test_s3_secret_is_not_interpolated(self):
         secret = "'\"#:$()\\\n"
@@ -105,7 +115,7 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertEqual(config["es"]["username"], "elastic")
 
     def test_unsupported_runtime_and_redis_endpoints_fail(self):
-        for override in ({"API_PROXY_SCHEME": "go"}, {"DB_TYPE": "postgres"}, {"DOC_ENGINE": "infinity"}, {"STORAGE_IMPL": "S3"}, {"REDIS_HOST": "rediss://redis:6379"}, {"REDIS_HOST": "::1"}):
+        for override in ({"DB_TYPE": "postgres"}, {"DOC_ENGINE": "infinity"}, {"STORAGE_IMPL": "S3"}, {"REDIS_HOST": "rediss://redis:6379"}, {"REDIS_HOST": "::1"}):
             with self.subTest(override=override):
                 with self.assertRaises(ValueError):
                     build_config(environment() | override)

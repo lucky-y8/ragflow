@@ -65,7 +65,7 @@ def _endpoint(value, key):
 
 def build_config(env):
     """把平台环境变量映射成当前 Python 后端实际读取的配置字段。"""
-    for key, expected in (("API_PROXY_SCHEME", "python"), ("DB_TYPE", "mysql"), ("DOC_ENGINE", "elasticsearch")):
+    for key, expected in (("DB_TYPE", "mysql"), ("DOC_ENGINE", "elasticsearch")):
         if _value(env, key, expected) != expected:
             raise ValueError(f"This deployment requires {key}={expected}")
 
@@ -120,17 +120,16 @@ def build_config(env):
         # 模型和供应商凭据在应用启动后通过界面配置，不继承镜像中的示例模型地址。
         "user_default_llm": {},
     }
-    # 两种存储客户端的字段不同；MinIO 拆出协议开关，S3 保留完整 endpoint。
+    # v0.24.0 的 MinIO 客户端固定 HTTP；S3 客户端读取完整地址和 region_name。
     if storage == "MINIO":
+        if parsed.scheme != "http":
+            raise ValueError("v0.24.0 MINIO only supports HTTP; use STORAGE_IMPL=AWS_S3 for HTTPS")
         config["minio"] = {
             "host": parsed.netloc,
             "user": access_key,
             "password": secret_key,
             "bucket": bucket,
             "prefix_path": prefix,
-            "region": region,
-            "secure": parsed.scheme == "https",
-            "verify": True,
         }
     else:
         style = _value(env, "S3_ADDRESSING_STYLE", "path")
@@ -140,7 +139,7 @@ def build_config(env):
             "endpoint_url": endpoint.rstrip("/"),
             "access_key": access_key,
             "secret_key": secret_key,
-            "region": region,
+            "region_name": region,
             "bucket": bucket,
             "prefix_path": prefix,
             "signature_version": "s3v4",
