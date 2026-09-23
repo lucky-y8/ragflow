@@ -86,6 +86,23 @@ sudo env \
 
 `graspologic` 是固定提交的 Git 依赖。若日志出现 `curl 92 HTTP/2 stream ... CANCEL`、`early EOF` 或 `invalid index-pack output`，说明 Git 下载连接中断，不能据此判断为 ARM64 编译不支持。Dockerfile 已在 Python 依赖安装层设置 `git config --global http.version HTTP/1.1`；该设置只写入构建阶段容器，不修改宿主机配置，依赖提交及 TLS 校验保持原样。参考 [Git http.version 文档](https://git-scm.com/docs/git-config#Documentation/git-config.txt-httpversion)。更新后使用相同 Builder、APT 镜像源和构建命令重试，已成功的基础层及 uv 下载缓存可继续复用。持续网络故障仍需检查代理链路。
 
+如果普通 Python 包出现 `Failed to download distribution due to network timeout`，可使用阿里 PyPI 镜像：
+
+```bash
+sudo env \
+  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  RAGFLOW_APT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports' \
+  RAGFLOW_PYPI_MIRROR=aliyun \
+  UV_CONCURRENT_DOWNLOADS=4 \
+  UV_HTTP_TIMEOUT=600 \
+  bash build.sh
+```
+
+`RAGFLOW_PYPI_MIRROR` 支持 `pypi`（默认）和 `aliyun`。此参数独立于 `RAGFLOW_APT_MIRROR`；APT 保持上次的值以复用基础层。镜像构建时会同时替换 `pyproject.toml` 和 `uv.lock` 中的 PyPI 索引、包文件下载地址，不重新解析或升级版本，保留所有 SHA-256 校验以及 Git 依赖的 URL/固定提交。仅设置宿主机 pip 镜像或修改索引地址，不能覆盖 `uv sync --frozen` 已锁定的文件地址。
+
+Python 安装阶段默认最多同时下载 4 个包，HTTP 读取超时 600 秒；这两个参数须为正整数。基础阶段的工具下载设置不变，避免使已完成的系统安装缓存失效。新镜像地址可能需要重新下载部分普通 Python 包；现有 Git 缓存保留。GitHub 源码依赖仍通过原代理获取，阿里 PyPI 不替代 GitHub。若代理继续拥堵，可将 `UV_CONCURRENT_DOWNLOADS` 降到 `2`。参考[阿里 PyPI 镜像说明](https://developer.aliyun.com/mirror/pypi)和 [uv 下载参数](https://docs.astral.sh/uv/reference/environment/#uv_concurrent_downloads)。
+
 默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。这里只确认依赖可解析，尚不保证该硬件能完成这一版全量构建。
 
 不要只运行目录外旧的 `docker/build_python_arm64.sh`；本版本要运行本目录的 `build.sh`，由它传入固定源码、专用锁文件与资源。若需自定义镜像名，构建和自检都传入相同 `RAGFLOW_IMAGE`。

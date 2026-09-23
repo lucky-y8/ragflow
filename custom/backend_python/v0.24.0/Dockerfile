@@ -137,15 +137,28 @@ ARG UV_CONCURRENT_BUILDS=1
 ENV UV_CONCURRENT_BUILDS=${UV_CONCURRENT_BUILDS}
 COPY --from=packaging /build/pyproject.toml /build/uv.lock ./
 
+# 只调整 Python 安装层，避免让已完成的系统依赖层重新构建。
+ARG PYPI_MIRROR=pypi
+ARG PYTHON_DOWNLOAD_CONCURRENCY=4
+ARG PYTHON_DOWNLOAD_TIMEOUT=600
 RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
-    if [ "$NEED_MIRROR" == "1" ]; then \
-        sed -i 's|pypi.org|pypi.tuna.tsinghua.edu.cn|g' uv.lock; \
-    else \
-        sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
-    fi; \
+    set -eu; \
+    case "$PYPI_MIRROR" in \
+        pypi) ;; \
+        aliyun) \
+            # frozen 安装使用锁文件中的下载地址，因此索引和文件地址必须一起替换。
+            # 保持版本、依赖关系及 SHA-256 不变，由 uv 继续校验下载内容。
+            sed -i \
+                -e 's|https://pypi.org/simple|https://mirrors.aliyun.com/pypi/simple|g' \
+                -e 's|https://files.pythonhosted.org/packages/|https://mirrors.aliyun.com/pypi/packages/|g' \
+                pyproject.toml uv.lock ;; \
+        *) echo "PYPI_MIRROR must be pypi or aliyun" >&2; exit 1 ;; \
+    esac; \
     # uv 的 Git 依赖由 git 子进程拉取；构建阶段使用 HTTP/1.1 避开代理的 HTTP/2 流中断。
-    git config --global http.version HTTP/1.1 && \
-    uv sync --python 3.12.12 --frozen --no-dev && \
+    git config --global http.version HTTP/1.1; \
+    UV_CONCURRENT_DOWNLOADS="$PYTHON_DOWNLOAD_CONCURRENCY" \
+    UV_HTTP_TIMEOUT="$PYTHON_DOWNLOAD_TIMEOUT" \
+        uv sync --python 3.12.12 --frozen --no-dev; \
     # 保留原版在运行时安装扩展依赖所需的 pip。
     .venv/bin/python3 -m ensurepip --upgrade
 
