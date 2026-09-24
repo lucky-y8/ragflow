@@ -146,7 +146,7 @@ sudo docker push registry.example.com/your-project/ragflow:v0.24.0-arm64
 
 ## 5. 填写 K8s 和环境变量
 
-本包没有 Kustomize 依赖，普通变量直接修改 `k8s/ragflow.yaml` 开头的两个 ConfigMap，密码由 Secret 提供。所有 `namespace: ragflow-v0240` 都是示例，统一改成平台分配的已存在 namespace。
+本包没有 Kustomize 依赖，普通变量直接修改 `k8s/ragflow.yaml` 开头的两个 ConfigMap，密码由 Secret 提供。应用资源和凭据 Secret 的命名空间统一为 `maas-view`，请确认平台已创建该命名空间；本模板不创建 namespace。
 
 | 参数 | 填写方式 |
 | --- | --- |
@@ -177,7 +177,7 @@ v0.24.0 的 MinIO 客户端固定 `secure=False`，因此适配器会拒绝 `MIN
 ```bash
 cp k8s/credentials.yaml.example k8s/credentials.local.yaml
 # 编辑 credentials.local.yaml，填写真实密码/密钥；此文件已被 .gitignore 排除。
-kubectl -n YOUR_NAMESPACE apply -f k8s/credentials.local.yaml
+kubectl -n maas-view apply -f k8s/credentials.local.yaml
 ```
 
 ## 6. 部署与验收
@@ -187,16 +187,16 @@ kubectl -n YOUR_NAMESPACE apply -f k8s/credentials.local.yaml
 ```bash
 kubectl apply --dry-run=server -f k8s/ragflow.yaml
 kubectl apply -f k8s/ragflow.yaml
-kubectl -n YOUR_NAMESPACE rollout status deployment/ragflow-v0240 --timeout=20m
-kubectl -n YOUR_NAMESPACE get pods -l app.kubernetes.io/name=ragflow-v0240 -o wide
-kubectl -n YOUR_NAMESPACE logs deployment/ragflow-v0240 -c render-config
-kubectl -n YOUR_NAMESPACE logs deployment/ragflow-v0240 -c ragflow --tail=200
+kubectl -n maas-view rollout status deployment/ragflow-v0240 --timeout=20m
+kubectl -n maas-view get pods -l app.kubernetes.io/name=ragflow-v0240 -o wide
+kubectl -n maas-view logs deployment/ragflow-v0240 -c render-config
+kubectl -n maas-view logs deployment/ragflow-v0240 -c ragflow --tail=200
 ```
 
 ConfigMap 和 Secret 更新后，必须重建 Pod，才能重新读取变量并执行配置生成：
 
 ```bash
-kubectl -n YOUR_NAMESPACE rollout restart deployment/ragflow-v0240
+kubectl -n maas-view rollout restart deployment/ragflow-v0240
 ```
 
 应用默认一个副本、一个任务执行器，解析并发为 1。资源起始值 request 2 CPU / 4 GiB、limit 4 CPU / 8 GiB，属于联调配置，实际容量需验证。镜像固定调度到 Linux ARM64 节点；Pod Pending 时检查架构、资源配额、节点污点。
@@ -204,7 +204,7 @@ kubectl -n YOUR_NAMESPACE rollout restart deployment/ragflow-v0240
 Service 是集群内 80 端口，前端页面和 API 走同一入口。外部域名、Ingress、网关 TLS 由平台配置，需支持文件上传和较长的流式响应。临时测试可用：
 
 ```bash
-kubectl -n YOUR_NAMESPACE port-forward service/ragflow-v0240 9380:80
+kubectl -n maas-view port-forward service/ragflow-v0240 9380:80
 # 浏览器访问 http://127.0.0.1:9380
 ```
 

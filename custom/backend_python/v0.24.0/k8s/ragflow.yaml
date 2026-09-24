@@ -1,11 +1,11 @@
 # RAGFlow v0.24.0 / Linux ARM64 部署文件，所有普通环境变量集中在两个 ConfigMap 中。
-# 请统一替换各资源的 namespace、两处镜像地址和 REPLACE_ME 参数；无需 Kustomize。
+# 部署命名空间为 maas-view；请替换两处镜像地址和 REPLACE_ME 参数；无需 Kustomize。
 # 本模板不创建 namespace 或中间件，密码由同 namespace 的 ragflow-v0240-credentials 提供。
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ragflow-v0240-runtime
-  namespace: ragflow-v0240
+  namespace: maas-view
 data:
   # 该版本默认就是 Python 后端，不需要当前开发版的 API_PROXY_SCHEME 参数。
   DB_TYPE: "mysql"
@@ -24,7 +24,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ragflow-v0240-connections
-  namespace: ragflow-v0240
+  namespace: maas-view
 data:
   # MySQL 地址不包含协议和端口；使用为该版本准备的独立数据库。
   MYSQL_HOST: "REPLACE_ME_MYSQL_HOST"
@@ -55,7 +55,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ragflow-v0240
-  namespace: ragflow-v0240
+  namespace: maas-view
 spec:
   # 单副本联调；升级会短暂停服，应等正在解析的任务结束后再更新。
   replicas: 1
@@ -156,7 +156,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ragflow-v0240
-  namespace: ragflow-v0240
+  namespace: maas-view
 spec:
   # 集群内访问入口；域名、Ingress 和外部 TLS 由平台配置。
   type: ClusterIP
