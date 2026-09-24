@@ -280,6 +280,7 @@ exclude_lines = [
 directory = "htmlcov"
 title = "Test Coverage Report"
 # extra_css = "custom.css"  # Optional custom CSS
-# ARM64 使用项目已有的 mini-racer，排除没有 ARM64 wheel 且模块名冲突的 py-mini-racer。
+# ARM64 统一使用项目已有的 mini-racer（提供 ARM64 wheel）。
+# akshare 在 Linux 引入的 akracer，以及 py-mini-racer，都会覆盖同名 py_mini_racer 模块。
 [tool.uv]
-exclude-dependencies = ["py-mini-racer"]
+exclude-dependencies = ["akracer", "py-mini-racer"]

@@ -136,6 +136,7 @@ WORKDIR /ragflow
 ARG UV_CONCURRENT_BUILDS=1
 ENV UV_CONCURRENT_BUILDS=${UV_CONCURRENT_BUILDS}
 COPY --from=packaging /build/pyproject.toml /build/uv.lock ./
+COPY --from=packaging /runtime/check_mini_racer.py /opt/ragflow-deploy/check_mini_racer.py
 
 # 只调整 Python 安装层，避免让已完成的系统依赖层重新构建。
 ARG PYPI_MIRROR=pypi
@@ -160,7 +161,9 @@ RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
     UV_HTTP_TIMEOUT="$PYTHON_DOWNLOAD_TIMEOUT" \
         uv sync --python 3.12.12 --frozen --no-dev; \
     # 保留原版在运行时安装扩展依赖所需的 pip。
-    .venv/bin/python3 -m ensurepip --upgrade
+    .venv/bin/python3 -m ensurepip --upgrade; \
+    # 安装后立即检查同名模块冲突和原生 JavaScript 引擎，避免到交付自检才失败。
+    .venv/bin/python3 /opt/ragflow-deploy/check_mini_racer.py
 
 COPY web web
 COPY docs docs

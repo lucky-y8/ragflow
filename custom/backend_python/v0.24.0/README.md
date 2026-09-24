@@ -6,7 +6,7 @@
 
 构建对象固定为官方 **v0.24.0** 提交 `392ec99651da78f6a8e1a2f60fe4818a95a8651d`。准备脚本另行下载该提交源码；应用内容来自官方版本，构建适配来自本文件夹。默认输出 **`ragflow:v0.24.0-arm64`**，包含 Python 后端、前端 Nginx、一个任务执行器和数据同步进程。MySQL、Redis、对象存储、Elasticsearch 全部接平台现有服务。
 
-本包已完成锁文件校验、Linux ARM64 / Python 3.12 依赖安装模拟、14 项单元测试、脚本语法和 YAML 离线检查。**尚未在你的 ARM 电脑上构建这一版镜像，也未连接实际 K8s 平台。** 前一次成功的镜像自检属于之前的版本，v0.24.0 需要重新构建、自检和联调。
+本包已完成锁文件校验、Linux ARM64 / Python 3.12 依赖安装模拟、14 项单元测试、脚本语法和 YAML 离线检查。完整 ARM64 运行验证须以当前镜像执行下文自检的结果为准；构建成功不代表自检或实际 K8s 联调通过。
 
 ## 文件说明
 
@@ -29,6 +29,7 @@ v0.24.0/
 │   └── uv.lock                     对应的锁文件
 ├── runtime/
 │   ├── render_config.py            环境变量 → local.service_conf.yaml
+│   ├── check_mini_racer.py          构建和自检共用的 JavaScript 引擎检查
 │   └── smoke_test.py               镜像内执行的自检
 ├── k8s/
 │   ├── ragflow.yaml                两个 ConfigMap、Deployment、Service
@@ -103,7 +104,7 @@ sudo env \
 
 Python 安装阶段默认最多同时下载 4 个包，HTTP 读取超时 600 秒；这两个参数须为正整数。基础阶段的工具下载设置不变，避免使已完成的系统安装缓存失效。新镜像地址可能需要重新下载部分普通 Python 包；现有 Git 缓存保留。GitHub 源码依赖仍通过原代理获取，阿里 PyPI 不替代 GitHub。若代理继续拥堵，可将 `UV_CONCURRENT_DOWNLOADS` 降到 `2`。参考[阿里 PyPI 镜像说明](https://developer.aliyun.com/mirror/pypi)和 [uv 下载参数](https://docs.astral.sh/uv/reference/environment/#uv_concurrent_downloads)。
 
-默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。这里只确认依赖可解析，尚不保证该硬件能完成这一版全量构建。
+默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。构建所需资源仍以实际执行结果为准。
 
 不要只运行目录外旧的 `docker/build_python_arm64.sh`；本版本要运行本目录的 `build.sh`，由它传入固定源码、专用锁文件与资源。若需自定义镜像名，构建和自检都传入相同 `RAGFLOW_IMAGE`。
 
@@ -114,6 +115,10 @@ sudo bash smoke_test.sh
 ```
 
 自检不连接中间件，检查：镜像架构、`VERSION=v0.24.0`、Python 3.12、OpenCV/NumPy/XGBoost/ONNX Runtime 等依赖、MiniRacer JavaScript 引擎、NLTK 分词和词典、Nginx 配置、Chrome 与 ChromeDriver 配合运行。
+
+若遇到 `MiniRacer object does not support the context manager protocol`，须检查同名模块冲突。锁定的 `mini-racer 0.12.4` 支持 `with`；但 AkShare 的 Linux 依赖 `akracer 0.0.14` 也提供 `py_mini_racer/__init__.py`，会使实际导入的实现受安装顺序影响。本包排除 `akracer` 和 `py-mini-racer`，统一由 `mini-racer` 提供引擎，保留 AkShare 及其余依赖版本。构建时和镜像自检都会检查冲突包，并执行 `eval`、`call`、`execute`。参考 [MiniRacer 版本说明](https://pypi.org/project/mini-racer/0.12.4/)和 [AKRacer 源码](https://github.com/akfamily/akracer/blob/main/py_mini_racer/__init__.py)。
+
+更新后需要使用与上次相同的 Builder、APT/PyPI 镜像和参数重新运行 `build.sh`，再运行 `sudo bash smoke_test.sh`。无需重跑 `prepare.sh` 或清缓存；系统层可继续复用，Python 安装层及后续阶段会重新构建。只更新本地脚本不会改变已生成镜像中的依赖和自检文件，不要通过删掉 `with` 来跳过冲突。
 
 ONNX Runtime 的 GPU 探测警告需要结合退出结果判断；本模板按 CPU 部署，没有申请 GPU。自检通过后还需在平台验证数据库连接、文件上传、实际文档解析和模型问答。
 

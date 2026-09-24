@@ -1,6 +1,5 @@
 """镜像离线自检；实际数据库连接和文档解析须在平台联调时验证。"""
 
-import importlib.metadata
 import platform
 import sys
 from pathlib import Path
@@ -12,10 +11,11 @@ import onnxruntime
 import peewee
 import quart
 import xgboost
-from py_mini_racer import MiniRacer
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+
+from check_mini_racer import check_mini_racer
 
 assert platform.machine() == "aarch64"
 assert sys.version_info[:2] == (3, 12)
@@ -24,14 +24,7 @@ assert "CPUExecutionProvider" in onnxruntime.get_available_providers()
 assert cv2.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), cv2.COLOR_BGR2GRAY).shape == (2, 2)
 assert xgboost.__version__ == "1.6.0"
 assert peewee.__version__ and quart.Quart
-try:
-    importlib.metadata.version("py-mini-racer")
-except importlib.metadata.PackageNotFoundError:
-    pass
-else:
-    raise AssertionError("不应安装与 mini-racer 冲突的 py-mini-racer")
-with MiniRacer() as runtime:
-    assert runtime.eval("1 + 1") == 2
+check_mini_racer()
 assert nltk.word_tokenize("ARM test.") == ["ARM", "test", "."]
 from nltk.corpus import wordnet
 
