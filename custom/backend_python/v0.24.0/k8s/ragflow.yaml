@@ -1,5 +1,5 @@
 # RAGFlow v0.24.0 / Linux ARM64 部署文件，所有普通环境变量集中在两个 ConfigMap 中。
-# 部署命名空间为 maas-view；请替换两处镜像地址和 REPLACE_ME 参数；无需 Kustomize。
+# 部署命名空间为 maas-view，镜像地址已按平台填写；请替换剩余 REPLACE_ME 连接参数。
 # 本模板不创建 namespace 或中间件，密码由同 namespace 的 ragflow-v0240-credentials 提供。
 apiVersion: v1
 kind: ConfigMap
@@ -83,7 +83,7 @@ spec:
       initContainers:
         # 脚本已打包在本版本镜像中，将环境变量和 Secret 转换成安全的 JSON/YAML 配置。
         - name: render-config
-          image: registry.example.com/replace-me/ragflow:v0.24.0-arm64
+          image: 10.224.32.103:32443/maas/ragflow:v0.24.0-arm64-test
           imagePullPolicy: IfNotPresent
           command: ["/ragflow/.venv/bin/python3", "/opt/ragflow-deploy/render_config.py"]
           envFrom:
@@ -102,8 +102,11 @@ spec:
       containers:
         - name: ragflow
           # 必须与初始化容器使用同一版本；这里不能填之前构建的开发版镜像。
-          image: registry.example.com/replace-me/ragflow:v0.24.0-arm64
+          image: 10.224.32.103:32443/maas/ragflow:v0.24.0-arm64-test
           imagePullPolicy: IfNotPresent
+          # 显式沿用镜像工作目录和官方入口，启动一个任务执行器。
+          workingDir: /ragflow
+          command: ["/ragflow/entrypoint.sh"]
           args: ["--workers=1"]
           # 连接 Secret 只注入初始化容器，主容器从生成的配置文件读取。
           envFrom:
@@ -112,6 +115,7 @@ spec:
           ports:
             - name: http
               containerPort: 80
+              protocol: TCP
           # 联调起始配置，OCR/大文件的实际内存需求需通过平台负载测试确定。
           resources:
             requests: {cpu: "2", memory: 4Gi}
@@ -166,3 +170,4 @@ spec:
     - name: http
       port: 80
       targetPort: http
+      protocol: TCP

@@ -150,7 +150,7 @@ sudo docker push registry.example.com/your-project/ragflow:v0.24.0-arm64
 
 | 参数 | 填写方式 |
 | --- | --- |
-| 两处 `image` | 平台已导入/已推送的本版本 ARM64 镜像地址，保持一致 |
+| 两处 `image` | 当前为 `10.224.32.103:32443/maas/ragflow:v0.24.0-arm64-test`；平台仓库中需已存在该镜像，初始化容器与应用容器保持一致 |
 | `imagePullSecrets` | 私有仓库需要时取消注释，引用同 namespace 的仓库凭据；与中间件密码 Secret 不同 |
 | `DB_TYPE` / `DOC_ENGINE` | 本模板固定 `mysql` / `elasticsearch` |
 | `MYSQL_HOST/PORT/DBNAME/USER` | 主机名或 IPv4、实际端口、预先创建的专用库、应用账号；密码放 `MYSQL_PASSWORD` |
@@ -200,6 +200,8 @@ kubectl -n maas-view rollout restart deployment/ragflow-v0240
 ```
 
 应用默认一个副本、一个任务执行器，解析并发为 1。资源起始值 request 2 CPU / 4 GiB、limit 4 CPU / 8 GiB，属于联调配置，实际容量需验证。镜像固定调度到 Linux ARM64 节点；Pod Pending 时检查架构、资源配额、节点污点。
+
+主容器显式设置工作目录 `/ragflow`、启动命令 `["/ragflow/entrypoint.sh"]` 和参数 `["--workers=1"]`，与镜像原有启动方式一致。容器端口名称为 `http`、端口为 `80`、协议为 `TCP`，Service 也显式使用 `TCP`。初始化容器仍通过 Python 执行配置生成脚本。
 
 Service 是集群内 80 端口，前端页面和 API 走同一入口。外部域名、Ingress、网关 TLS 由平台配置，需支持文件上传和较长的流式响应。临时测试可用：
 
