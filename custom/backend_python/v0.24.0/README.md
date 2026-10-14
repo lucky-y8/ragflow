@@ -44,7 +44,7 @@ v0.24.0/
 cd ~/Desktop/workcode/ragflow/custom/backend_python/v0.24.0
 uname -m
 # 应为 aarch64。需要 curl、tar、sha256sum、bash、realpath、awk 和可用网络。
-env RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' bash prepare.sh
+env RAGFLOW_BUILD_PROXY='http://192.168.36.203:7890' bash prepare.sh
 ```
 
 不需要在宿主机安装整套 RAGFlow。脚本下载独立的 uv 0.9.16（校验官方 SHA-256），用它管理 Python 3.12.12 和下载脚本依赖。这里不调用旧版 `nltk.download()`，不会触发之前遇到的 NLTK 代理 DNS 安全检查。
@@ -55,12 +55,29 @@ env RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' bash prepare.sh
 
 ## 2. 构建镜像
 
-使用已配置新代理的 `ragflow-arm64-proxy-235` Builder（脚本默认值仍为原 Builder，因此这里显式指定）：
+当前代理为 `http://192.168.36.203:7890`。首次切换到此代理时，创建独立的 `ragflow-arm64-proxy-36` Builder，让 BuildKit 拉取基础镜像时也使用新代理（只需创建一次）：
+
+```bash
+sudo env DOCKER_CLI_EXPERIMENTAL=enabled docker buildx create \
+  --name ragflow-arm64-proxy-36 \
+  --driver docker-container \
+  --driver-opt image=moby/buildkit:v0.12.5 \
+  --driver-opt env.HTTP_PROXY=http://192.168.36.203:7890 \
+  --driver-opt env.HTTPS_PROXY=http://192.168.36.203:7890 \
+  --driver-opt env.http_proxy=http://192.168.36.203:7890 \
+  --driver-opt env.https_proxy=http://192.168.36.203:7890
+sudo env DOCKER_CLI_EXPERIMENTAL=enabled docker buildx inspect \
+  ragflow-arm64-proxy-36 --bootstrap
+```
+
+同名 Builder 已存在时，跳过 `create`，执行 `inspect` 确认 `Driver Options` 中的代理地址为上述新地址、状态为 `running`。新 Builder 的构建缓存独立，首次构建可能需要重新下载和构建；原 Builder 及其缓存保留。
+
+随后显式指定此 Builder 构建（脚本默认值仍为原 Builder）：
 
 ```bash
 sudo env \
-  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
-  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  RAGFLOW_BUILD_PROXY='http://192.168.36.203:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-36' \
   bash build.sh
 ```
 
@@ -92,7 +109,7 @@ sudo env \
 
 脚本明确使用 **`custom/backend_python/v0.24.0/Dockerfile`**。修改仓库根目录的 `Dockerfile` 不会改变这条构建命令的步骤；ARM64 构建步骤应修改本目录 Dockerfile，软件源使用下文的 `RAGFLOW_APT_MIRROR` / `RAGFLOW_PYPI_MIRROR` 参数。同步业务代码时，也要保留根目录依赖文件中的 ARM64 排除项；不要用未适配的原版清单覆盖它们。
 
-代理同时用于下载、Buildx 客户端鉴权和构建步骤。Builder 容器自身仍需已有的代理配置；脚本不会创建或修改 Builder。Builder 名称不同时，用 `RAGFLOW_BUILDER` 指定实际名称。
+代理同时用于下载、Buildx 客户端鉴权和构建步骤。Builder 容器自身使用创建时的代理配置；仅修改 `RAGFLOW_BUILD_PROXY` 不会更新旧 Builder，脚本也不会创建或修改 Builder。Builder 名称不同时，用 `RAGFLOW_BUILDER` 指定实际名称，并确认它的代理配置一致。
 
 APT 下载配置了 5 次重试、60 秒连接/传输超时和 deb 缓存；更新索引或安装失败会立即退出，不使用 `--fix-missing` 跳过依赖。默认安装证书后使用官方 HTTPS `ubuntu-ports` 源。基础镜像缺少证书，最初的索引更新和证书安装仍使用原 HTTP 源，并同样启用重试。
 
@@ -100,8 +117,8 @@ APT 下载配置了 5 次重试、60 秒连接/传输超时和 deb 缓存；更�
 
 ```bash
 sudo env \
-  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
-  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  RAGFLOW_BUILD_PROXY='http://192.168.36.203:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-36' \
   RAGFLOW_APT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports' \
   bash build.sh
 ```
@@ -114,8 +131,8 @@ sudo env \
 
 ```bash
 sudo env \
-  RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' \
-  RAGFLOW_BUILDER='ragflow-arm64-proxy-235' \
+  RAGFLOW_BUILD_PROXY='http://192.168.36.203:7890' \
+  RAGFLOW_BUILDER='ragflow-arm64-proxy-36' \
   RAGFLOW_APT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports' \
   RAGFLOW_PYPI_MIRROR=aliyun \
   UV_CONCURRENT_DOWNLOADS=4 \
@@ -151,21 +168,26 @@ ONNX Runtime 的 GPU 探测警告需要结合退出结果判断；本模板按 C
 
 ### 4.1 在构建电脑导出镜像
 
-在 ARM 构建电脑的本目录执行，导出成功后生成校验文件：
+在 ARM 构建电脑的本目录执行，压缩包名称自动加入导出当天的日期（`YYYYMMDD`），导出成功后生成同名校验文件：
 
 ```bash
 set -o pipefail
-sudo docker save ragflow:v0.24.0-arm64 | gzip > ragflow-v0.24.0-arm64.tar.gz && \
-sha256sum ragflow-v0.24.0-arm64.tar.gz > ragflow-v0.24.0-arm64.tar.gz.sha256
+archive="ragflow-v0.24.0-arm64-$(date +%Y%m%d).tar.gz"
+sudo docker save ragflow:v0.24.0-arm64 | gzip > "$archive" && \
+sha256sum "$archive" > "$archive.sha256"
 ```
+
+例如 2026 年 10 月 14 日导出得到 `ragflow-v0.24.0-arm64-20261014.tar.gz` 和 `ragflow-v0.24.0-arm64-20261014.tar.gz.sha256`。日期只用于归档文件名，包内镜像标签仍为 `ragflow:v0.24.0-arm64`。同一天多次导出会覆盖同名文件；需要保留多份时，将日期格式改为 `date +%Y%m%d-%H%M%S`。
 
 ### 4.2 在内网机器校验并导入镜像
 
 将 `.tar.gz` 和 `.tar.gz.sha256` 两个文件一起传到内网机器，并在文件所在目录执行。导入前确认 Docker 数据目录所在分区有足够的容量和 inode；镜像层解压及临时文件需要额外空间，不能只按压缩包大小估算。
 
 ```bash
-sha256sum -c ragflow-v0.24.0-arm64.tar.gz.sha256 && \
-sudo docker load -i ragflow-v0.24.0-arm64.tar.gz && \
+# 改为收到的实际文件名，日期取导出日期，不是导入当天的日期。
+archive='ragflow-v0.24.0-arm64-20261014.tar.gz'
+sha256sum -c "$archive.sha256" && \
+sudo docker load -i "$archive" && \
 sudo docker image inspect ragflow:v0.24.0-arm64 --format '{{.Os}}/{{.Architecture}}'
 ```
 
