@@ -1,12 +1,12 @@
 # RAGFlow v0.24.0：ARM64 构建与 K8s 交付包
 
-本仓库的 `v0.24.0-arm64` 分支直接基于官方 `v0.24.0` 标签（提交 `392ec99651da78f6a8e1a2f60fe4818a95a8651d`）创建。上游应用源码保持原样，新增内容仅为本目录中的 ARM64 构建和 K8s 交付配置，不包含 admin 分支的业务改动。
+本仓库的 `v0.24.0-arm64` 分支基于官方 `v0.24.0` 标签（提交 `392ec99651da78f6a8e1a2f60fe4818a95a8651d`）创建，支持在此基础上修改应用并构建 ARM64 镜像。
 
-此文件夹可以单独拷贝到 ARM 电脑使用，包含构建脚本、Dockerfile、锁定依赖、资源下载器、自检脚本、K8s YAML 和环境变量/密码示例。普通配置均有中文注释。
+**构建使用本脚本所在仓库的当前工作目录。请同步完整仓库到 ARM 电脑，不能只复制此文件夹。** 已保存但未提交的修改、新增业务文件和删除操作都会参与构建；无需先 `git commit`。Python 依赖统一使用仓库根目录的 `pyproject.toml` 和 `uv.lock`，不再维护本目录的重复清单。
 
-构建对象固定为官方 **v0.24.0** 提交 `392ec99651da78f6a8e1a2f60fe4818a95a8651d`。准备脚本另行下载该提交源码；应用内容来自官方版本，构建适配来自本文件夹。默认输出 **`ragflow:v0.24.0-arm64`**，包含 Python 后端、前端 Nginx、一个任务执行器和数据同步进程。MySQL、Redis、对象存储、Elasticsearch 全部接平台现有服务。
+`prepare.sh` 只准备工具和依赖资源，不再下载应用源码，也不重置现有文件。脚本检查根目录 `project.version` 为 **0.24.0**，默认输出 **`ragflow:v0.24.0-arm64`**，包含 Python 后端、前端 Nginx、一个任务执行器和数据同步进程。MySQL、Redis、对象存储、Elasticsearch 全部接平台现有服务。
 
-本包已完成锁文件校验、Linux ARM64 / Python 3.12 依赖安装模拟、14 项单元测试、脚本语法和 YAML 离线检查。完整 ARM64 运行验证须以当前镜像执行下文自检的结果为准；构建成功不代表自检或实际 K8s 联调通过。
+完整 ARM64 运行验证须以当前镜像执行下文自检的结果为准；脚本检查和单元测试不能代替镜像构建、自检或实际 K8s 联调。
 
 ## 文件说明
 
@@ -14,19 +14,16 @@
 v0.24.0/
 ├── README.md                       本说明
 ├── LICENSE                         上游 Apache-2.0 许可证
-├── versions.env                    官方源码提交和主要工具版本
-├── prepare.sh                      下载固定版本源码、uv、模型和浏览器等资源
+├── versions.env                    应用版本基线和主要工具版本
+├── prepare.sh                      下载 uv、模型和浏览器等资源
 ├── build.sh                        使用已有 Buildx Builder 构建并导入 Docker
 ├── smoke_test.sh                   检查镜像版本、原生依赖、NLTK、Nginx 和浏览器
 ├── common.sh                       公共路径、代理与源码校验
 ├── Dockerfile                      ARM64 多阶段镜像构建文件
-├── Dockerfile.dockerignore          官方源码构建上下文的忽略规则
+├── Dockerfile.dockerignore          当前仓库构建上下文的忽略规则
 ├── .dockerignore                   本构建包上下文的忽略规则
 ├── .gitignore                      排除下载缓存、镜像压缩包和真实密码文件
 ├── download_resources.py           仅下载 Python 镜像需要的资源
-├── build/
-│   ├── pyproject.toml              v0.24.0 的依赖定义及 ARM64 排除项
-│   └── uv.lock                     对应的锁文件
 ├── runtime/
 │   ├── render_config.py            环境变量 → local.service_conf.yaml
 │   ├── check_mini_racer.py          构建和自检共用的 JavaScript 引擎检查
@@ -37,16 +34,16 @@ v0.24.0/
 └── tests/                          无外部服务依赖的测试
 ```
 
-`.build/` 在执行准备命令后生成，保存源码、工具和资源，不进入 Git。无需复制当前开发分支的应用代码进本目录，也无需切换当前仓库分支。构建时会检查独立源码目录的提交及修改状态；源码不符或有修改就退出，不会自动重置文件。
+`.build/` 保存工具和资源，不进入 Git。旧版留下的 `.build/source` 不再参与构建，保留或删除都不影响新的源码选择；无需重新下载已准备好的资源。脚本根据自身位置找到仓库根目录，不受执行命令时所在目录影响。
 
 ## 1. 在 ARM 电脑准备资源
 
-把整个 `v0.24.0` 文件夹同步到 ARM 电脑。下面命令假设它仍位于原仓库的 `custom/backend_python/` 中；单独复制到了其他地方，只需调整 `cd` 路径。
+把包含手动修改的完整 `v0.24.0-arm64` 仓库同步到 ARM 电脑，保持 `custom/backend_python/v0.24.0/` 的目录结构。已准备好资源时可直接跳到第 2 步。
 
 ```bash
 cd ~/Desktop/workcode/ragflow/custom/backend_python/v0.24.0
 uname -m
-# 应为 aarch64。需要 git、curl、tar、sha256sum、bash、realpath 和可用网络。
+# 应为 aarch64。需要 curl、tar、sha256sum、bash、realpath、awk 和可用网络。
 env RAGFLOW_BUILD_PROXY='http://192.168.235.138:7890' bash prepare.sh
 ```
 
@@ -68,6 +65,32 @@ sudo env \
 ```
 
 构建成功后输出 `ragflow:v0.24.0-arm64`，并检查镜像架构为 `linux/arm64`。脚本通过本地资源上下文提供模型和二进制文件，不需要下载 `infiniflow/ragflow_deps:latest` 镜像。使用 `--provenance=false --load`，沿用此前 Buildx 0.10.5 / BuildKit 0.12.5 的构建方式。
+
+### 源码全量覆盖规则
+
+构建日志会输出实际的“应用源码”路径。它应是你的 `ragflow` 仓库根目录，而不是 `.build/source`。构建阶段和最终镜像都复制当前工作目录，既有的 `api/`、`rag/`、`agent/`、`common/`、`conf/`、`web/` 等文件，以及新增业务目录和根目录文件均包含在内。已经删除的源码不会从官方仓库补回来；Git 是否跟踪文件不决定是否打包。
+
+| 修改内容 | 构建行为 |
+| --- | --- |
+| 后端、配置模板、新增业务模块 | 使用当前磁盘上的文件；需先在编辑器中保存，并同步到 ARM 构建电脑 |
+| 前端源码、`web/package.json` 和锁文件 | 在容器内重新安装前端依赖并执行 `npm run build`；本地旧 `web/dist` 不使用 |
+| 根目录 `pyproject.toml`、`uv.lock` | 使用当前依赖清单；修改依赖后先更新锁文件，清单与锁不一致会使构建失败 |
+| `docker/entrypoint.sh`、`docker/nginx/` | 使用当前版本，并保留入口的 ARM64 库路径适配 |
+| 本目录 `runtime/` | 打包到 `/opt/ragflow-deploy/`；构建脚本在宿主机执行，K8s YAML 单独部署 |
+
+全量覆盖仍有明确的排除项：虚拟环境、`node_modules`、`.build`、下载资源、日志/会话、旧前端产物、镜像归档，以及 `credentials.local.*`、`local.service_conf.yaml`、部署目录中的 K8s 配置等。完整规则见 `Dockerfile.dockerignore`；`.gitignore` 不能代替它。前端公开的 `.env`、`.env.development`、`.env.production` 和 `web/.npmrc` 保留，后者提供 npm 镜像源和 Node 引擎检查；`.env.*.local` 等本地环境文件排除。不要在这些公开构建配置中填写令牌或密码。真实连接密码继续通过 K8s Secret 提供；自定义命名的私密文件需要补充排除规则。
+
+如果修改了 Python 依赖，在本目录使用准备脚本下载的 uv 更新仓库根锁文件，再构建（如自定义了构建缓存路径，相应调整 uv 路径）：
+
+```bash
+.build/tools/uv-aarch64-unknown-linux-gnu/uv lock --project ../../.. --python 3.12.12
+```
+
+原 ARM64 的 `akracer` / `py-mini-racer` 排除项已合并到根目录，避免同名模块冲突。构建使用 `uv sync --locked`，不会静默忽略新依赖或自动升级锁定版本；区别见 [uv 锁文件说明](https://docs.astral.sh/uv/concepts/projects/sync/)。源码修改会重新执行 Python 安装层，但已有 uv 下载缓存和未变动的基础系统层可以复用。无需每次清空缓存或添加 `--no-cache`。
+
+镜像的 `org.opencontainers.image.revision` 记录当前 Git 提交，`io.ragflow.source.state` 记录 `clean` / `modified`；完整源码副本没有 Git 信息时为 `unknown`。提交号不能单独代表未提交改动，交付时仍建议为每次构建使用不同镜像标签。
+
+脚本明确使用 **`custom/backend_python/v0.24.0/Dockerfile`**。修改仓库根目录的 `Dockerfile` 不会改变这条构建命令的步骤；ARM64 构建步骤应修改本目录 Dockerfile，软件源使用下文的 `RAGFLOW_APT_MIRROR` / `RAGFLOW_PYPI_MIRROR` 参数。同步业务代码时，也要保留根目录依赖文件中的 ARM64 排除项；不要用未适配的原版清单覆盖它们。
 
 代理同时用于下载、Buildx 客户端鉴权和构建步骤。Builder 容器自身仍需已有的代理配置；脚本不会创建或修改 Builder。Builder 名称不同时，用 `RAGFLOW_BUILDER` 指定实际名称。
 
@@ -100,13 +123,13 @@ sudo env \
   bash build.sh
 ```
 
-`RAGFLOW_PYPI_MIRROR` 支持 `pypi`（默认）和 `aliyun`。此参数独立于 `RAGFLOW_APT_MIRROR`；APT 保持上次的值以复用基础层。镜像构建时会同时替换 `pyproject.toml` 和 `uv.lock` 中的 PyPI 索引、包文件下载地址，不重新解析或升级版本，保留所有 SHA-256 校验以及 Git 依赖的 URL/固定提交。仅设置宿主机 pip 镜像或修改索引地址，不能覆盖 `uv sync --frozen` 已锁定的文件地址。
+`RAGFLOW_PYPI_MIRROR` 支持 `pypi`（默认）和 `aliyun`。此参数独立于 `RAGFLOW_APT_MIRROR`；APT 保持上次的值以复用基础层。镜像构建时会同时替换 `pyproject.toml` 和 `uv.lock` 中的清华/PyPI 索引、包文件下载地址，保留锁定版本、SHA-256 校验以及 Git 依赖的 URL/固定提交。仅设置宿主机 pip 镜像或修改索引地址，不能覆盖锁文件内的包文件地址。宿主机文件不受镜像源替换影响。
 
 Python 安装阶段默认最多同时下载 4 个包，HTTP 读取超时 600 秒；这两个参数须为正整数。基础阶段的工具下载设置不变，避免使已完成的系统安装缓存失效。新镜像地址可能需要重新下载部分普通 Python 包；现有 Git 缓存保留。GitHub 源码依赖仍通过原代理获取，阿里 PyPI 不替代 GitHub。若代理继续拥堵，可将 `UV_CONCURRENT_DOWNLOADS` 降到 `2`。参考[阿里 PyPI 镜像说明](https://developer.aliyun.com/mirror/pypi)和 [uv 下载参数](https://docs.astral.sh/uv/reference/environment/#uv_concurrent_downloads)。
 
 默认 Node 构建堆上限 4096 MB、Python 包并行构建数 1，可通过 `NODE_BUILD_MAX_OLD_SPACE_SIZE` 和 `UV_CONCURRENT_BUILDS` 调整。你的 8 GB 机器仍可能在复杂原生编译时内存不足，应关闭其他占内存程序，检查实际可用内存、Swap，以及源码/资源目录和 `/var/lib/docker` 的可用空间。构建所需资源仍以实际执行结果为准。
 
-不要只运行目录外旧的 `docker/build_python_arm64.sh`；本版本要运行本目录的 `build.sh`，由它传入固定源码、专用锁文件与资源。若需自定义镜像名，构建和自检都传入相同 `RAGFLOW_IMAGE`。
+本版本运行本目录的 `build.sh`，由它传入当前仓库源码和依赖资源。若需自定义镜像名，构建和自检都传入相同 `RAGFLOW_IMAGE`。
 
 ## 3. 镜像自检
 
@@ -124,25 +147,43 @@ ONNX Runtime 的 GPU 探测警告需要结合退出结果判断；本模板按 C
 
 ## 4. 向平台交付镜像
 
-离线导出方式，在 ARM 电脑的本目录执行：
+`build.sh` 使用 `--load`，构建成功后镜像已存在于构建电脑的 Docker 中。如果构建电脑可以直接连接平台仓库，可直接执行第 4.3 步；通过文件传到内网时，按第 4.1 → 4.2 → 4.3 步执行。
+
+### 4.1 在构建电脑导出镜像
+
+在 ARM 构建电脑的本目录执行，导出成功后生成校验文件：
 
 ```bash
 set -o pipefail
-sudo docker save ragflow:v0.24.0-arm64 | gzip > ragflow-v0.24.0-arm64.tar.gz
+sudo docker save ragflow:v0.24.0-arm64 | gzip > ragflow-v0.24.0-arm64.tar.gz && \
 sha256sum ragflow-v0.24.0-arm64.tar.gz > ragflow-v0.24.0-arm64.tar.gz.sha256
 ```
 
-交给平台：镜像压缩包、SHA-256 文件、`k8s/ragflow.yaml`、`k8s/credentials.yaml.example` 和本文。平台将镜像导入仓库后，需要把 YAML 中两处 `image` 改成实际仓库地址。
+### 4.2 在内网机器校验并导入镜像
 
-平台提供仓库账号时，也可以推送（替换示例域名和项目路径）：
+将 `.tar.gz` 和 `.tar.gz.sha256` 两个文件一起传到内网机器，并在文件所在目录执行。导入前确认 Docker 数据目录所在分区有足够的容量和 inode；镜像层解压及临时文件需要额外空间，不能只按压缩包大小估算。
 
 ```bash
-sudo docker login registry.example.com
-sudo docker tag ragflow:v0.24.0-arm64 registry.example.com/your-project/ragflow:v0.24.0-arm64
-sudo docker push registry.example.com/your-project/ragflow:v0.24.0-arm64
+sha256sum -c ragflow-v0.24.0-arm64.tar.gz.sha256 && \
+sudo docker load -i ragflow-v0.24.0-arm64.tar.gz && \
+sudo docker image inspect ragflow:v0.24.0-arm64 --format '{{.Os}}/{{.Architecture}}'
 ```
 
-每次重新发布建议采用新 tag 或固定 digest，并同步 YAML 中初始化容器和应用容器的镜像地址。仅在构建电脑执行 `docker load` 不会让集群自动获得镜像。
+校验应显示 `OK`，导入完成应显示 `Loaded image: ragflow:v0.24.0-arm64`，架构应为 `linux/arm64`。`.tar.gz` 可以直接交给 `docker load -i`，无需先手动解压。校验失败或导入报错时先排查，不继续打标签和推送，以免误用机器上已有的旧镜像。
+
+### 4.3 登录平台仓库、打标签并推送
+
+在镜像已成功构建或导入、并且能够连接平台仓库的机器上执行。下面使用当前平台地址和测试标签：
+
+```bash
+sudo docker login 10.224.32.103:32443 && \
+sudo docker tag ragflow:v0.24.0-arm64 10.224.32.103:32443/maas/ragflow:v0.24.0-arm64-test && \
+sudo docker push 10.224.32.103:32443/maas/ragflow:v0.24.0-arm64-test
+```
+
+每次重新发布建议采用新 tag 或固定 digest，并同步 `k8s/ragflow.yaml` 中初始化容器和应用容器的两处 `image`。`docker load` 只把镜像导入当前连接的 Docker，不会自动上传仓库或分发给 Kubernetes 节点；本部署流程还需要完成 `docker push`。
+
+交给平台：镜像压缩包、SHA-256 文件、`k8s/ragflow.yaml`、`k8s/credentials.yaml.example` 和本文。若由平台人员负责导入及上传仓库，同样执行第 4.2 和第 4.3 步。
 
 ## 5. 填写 K8s 和环境变量
 
@@ -219,21 +260,22 @@ kubectl -n maas-view port-forward service/ragflow-v0240 9380:80
 ## 7. 构建适配与集成点
 
 - 基于[官方 v0.24.0 Dockerfile](https://github.com/infiniflow/ragflow/blob/v0.24.0/Dockerfile)，保持 Python 3.12、Node.js 20、Tika 3.2.3，增加 ARM64 Chrome/ChromeDriver 和系统库。
-- 以官方 `pyproject.toml`、`uv.lock` 为基础，仅排除没有 ARM64 wheel 且与 `mini-racer` 共享模块名的 `py-mini-racer`，其余锁定包版本保留；索引地址统一使用 PyPI。镜像使用 `--frozen` 安装。
-- 镜像内删除 `docker/entrypoint.sh` 写死的 x86_64 `LD_LIBRARY_PATH`，保留其 Python API、工作进程和数据同步启动流程。没有改动应用业务代码。
+- 根目录 `pyproject.toml`、`uv.lock` 保留 ARM64 适配，排除与 `mini-racer` 共享模块名的 `akracer`、`py-mini-racer`，其余锁定包版本保留。镜像使用 `--locked` 安装当前依赖。
+- 镜像内删除当前 `docker/entrypoint.sh` 写死的 x86_64 `LD_LIBRARY_PATH`，保留其 Python API、工作进程和数据同步启动流程。
 - 官方 Compose 挂载的 `docker/nginx/` 三份配置改为直接打包进镜像，使 K8s Service 80 端口能够访问页面和 API。
 - `runtime/render_config.py` 打包到 `/opt/ragflow-deploy/`。初始化容器读取 ConfigMap/Secret，写入权限为 0600 的 JSON 文件；JSON 可由原版 YAML 解析器读取，密码中的引号、换行和 `$` 等字符会原样保留。
 - 主容器仅挂载 `/ragflow/conf/local.service_conf.yaml`，使用 `common/config_utils.py:read_config()` 的顶层配置覆盖机制，不覆盖整个 conf 目录。连接 Secret 不再注入主容器的原始 Shell 模板渲染过程。
 - 存储配置按 v0.24.0 的 `rag/utils/minio_conn.py`、`s3_conn.py` 和 `common/settings.py` 映射；探针对应 `api/apps/system_app.py` 注册的旧版路径。
 
-本目录是独立交付包，没有依赖旁边的其他部署目录。源码、构建资源和镜像的网络下载仍发生在准备/构建阶段，这不是完全离线的构建包。
+构建依赖当前完整仓库，不依赖其他部署目录。工具、依赖资源和基础镜像的下载仍发生在准备/构建阶段，这不是完全离线的构建包。
 
 维护时的本地检查：
 
 ```bash
+# Python 3.11+；依赖清单检查使用标准库 tomllib。
 python3 -m unittest discover -s tests -v
 for script in common.sh prepare.sh build.sh smoke_test.sh; do bash -n "$script" || exit; done
-# uv 使用本包依赖定义，不要对仓库根目录执行 uv sync。
-uv lock --project build --python 3.12 --check
-uv sync --project build --python 3.12 --python-platform aarch64-unknown-linux-gnu --frozen --no-dev --dry-run
+# 从本目录检查仓库根目录的当前依赖，不安装应用环境。
+uv lock --project ../../.. --python 3.12 --check
+uv sync --project ../../.. --python 3.12 --python-platform aarch64-unknown-linux-gnu --locked --no-dev --dry-run
 ```

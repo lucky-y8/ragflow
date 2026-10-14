@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# 下载固定版本的源码和 ARM64 资源；不安装应用到宿主机，不启动任何中间件。
+# 仅准备 ARM64 工具和资源；不拉取、覆盖或重置当前仓库的应用源码。
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 require_arm64
-for command_name in git curl tar sha256sum; do
+verify_source
+for command_name in curl tar sha256sum; do
     command -v "$command_name" >/dev/null || { echo "缺少工具：$command_name" >&2; exit 1; }
 done
 mkdir -p "$BUILD_ROOT/tools" "$RESOURCE_DIR"
-if [[ ! -e "$SOURCE_DIR" ]]; then
-    git clone --depth 1 --branch "$RAGFLOW_REF" https://github.com/infiniflow/ragflow.git "$SOURCE_DIR"
-fi
-verify_source
 
 # 使用单独缓存的 uv 0.9.16；不依赖用户 PATH，也不覆盖已安装的 uv。
 uv_archive="$BUILD_ROOT/tools/uv-aarch64-unknown-linux-gnu.tar.gz"

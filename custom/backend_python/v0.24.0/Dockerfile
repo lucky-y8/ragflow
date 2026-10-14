@@ -1,5 +1,5 @@
 # 基于官方 v0.24.0 Dockerfile（Apache-2.0），来源与改动见 README.md。
-# RAGFlow v0.24.0 专用 ARM64 镜像；使用本目录 build.sh 传入固定源码和资源上下文。
+# RAGFlow v0.24.0 专用 ARM64 镜像；使用本目录 build.sh 传入当前仓库源码和资源上下文。
 # 基础阶段：Ubuntu 24.04 和 Python 运行依赖。
 FROM ubuntu:24.04 AS base
 USER root
@@ -132,10 +132,11 @@ USER root
 
 WORKDIR /ragflow
 
-# 使用本包校验过的 v0.24.0 锁文件，单次只编译一个依赖以降低峰值内存。
+# 使用当前源码及根目录依赖清单，也覆盖新增目录和本地路径依赖。
+# 完整复制发生在依赖安装前，源码修改会重新执行安装，但 uv 下载缓存仍可复用。
 ARG UV_CONCURRENT_BUILDS=1
 ENV UV_CONCURRENT_BUILDS=${UV_CONCURRENT_BUILDS}
-COPY --from=packaging /build/pyproject.toml /build/uv.lock ./
+COPY . ./
 COPY --from=packaging /runtime/check_mini_racer.py /opt/ragflow-deploy/check_mini_racer.py
 
 # 只调整 Python 安装层，避免让已完成的系统依赖层重新构建。
@@ -144,10 +145,15 @@ ARG PYTHON_DOWNLOAD_CONCURRENCY=4
 ARG PYTHON_DOWNLOAD_TIMEOUT=600
 RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
     set -eu; \
+    # 兼容仓库原有清华地址；只在容器内调整下载源，不修改宿主机清单。
+    sed -i \
+        -e 's|https://pypi.tuna.tsinghua.edu.cn/simple|https://pypi.org/simple|g' \
+        -e 's|https://pypi.tuna.tsinghua.edu.cn/packages/|https://files.pythonhosted.org/packages/|g' \
+        pyproject.toml uv.lock; \
     case "$PYPI_MIRROR" in \
         pypi) ;; \
         aliyun) \
-            # frozen 安装使用锁文件中的下载地址，因此索引和文件地址必须一起替换。
+            # 锁定安装使用锁文件中的下载地址，因此索引和文件地址必须一起替换。
             # 保持版本、依赖关系及 SHA-256 不变，由 uv 继续校验下载内容。
             sed -i \
                 -e 's|https://pypi.org/simple|https://mirrors.aliyun.com/pypi/simple|g' \
@@ -159,23 +165,21 @@ RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
     git config --global http.version HTTP/1.1; \
     UV_CONCURRENT_DOWNLOADS="$PYTHON_DOWNLOAD_CONCURRENCY" \
     UV_HTTP_TIMEOUT="$PYTHON_DOWNLOAD_TIMEOUT" \
-        uv sync --python 3.12.12 --frozen --no-dev; \
+        uv sync --python 3.12.12 --locked --no-dev; \
     # 保留原版在运行时安装扩展依赖所需的 pip。
     .venv/bin/python3 -m ensurepip --upgrade; \
     # 安装后立即检查同名模块冲突和原生 JavaScript 引擎，避免到交付自检才失败。
     .venv/bin/python3 /opt/ragflow-deploy/check_mini_racer.py
 
-COPY web web
-COPY docs docs
 ARG NODE_BUILD_MAX_OLD_SPACE_SIZE=4096
 RUN --mount=type=cache,id=ragflow_npm,target=/root/.npm,sharing=locked \
     export NODE_OPTIONS="--max-old-space-size=${NODE_BUILD_MAX_OLD_SPACE_SIZE}" && \
     cd web && npm install && npm run build
 
-# 源码提交由宿主机构建脚本校验，版本文件不依赖当前工作区的 Git 标签。
+# 应用版本由宿主机构建脚本校验，源码提交与修改状态另存为镜像标签。
 RUN echo v0.24.0 > /ragflow/VERSION
 
-# 运行阶段：打包官方 v0.24.0 源码、前端产物和本包的部署适配器。
+# 运行阶段：打包当前仓库源码、重新编译的前端产物和部署适配器。
 FROM base AS production
 USER root
 
@@ -188,17 +192,9 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 ENV PYTHONPATH=/ragflow/
 
-COPY web web
-COPY admin admin
-COPY api api
-COPY conf conf
-COPY deepdoc deepdoc
-COPY rag rag
-COPY agent agent
-COPY --from=packaging /build/pyproject.toml /build/uv.lock ./
-COPY mcp mcp
-COPY common common
-COPY memory memory
+# 不再使用目录白名单；新增业务目录和根目录文件也进入镜像。
+# 密码、宿主机虚拟环境、旧 dist、下载缓存等由 Dockerfile.dockerignore 排除。
+COPY . ./
 
 COPY docker/service_conf.yaml.template ./conf/service_conf.yaml.template
 COPY docker/entrypoint.sh ./
@@ -210,8 +206,11 @@ COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY docker/nginx/ragflow.conf /etc/nginx/conf.d/ragflow.conf
 COPY docker/nginx/proxy.conf /etc/nginx/proxy.conf
 COPY --from=packaging /runtime/ /opt/ragflow-deploy/
+ARG SOURCE_REVISION=unknown
+ARG SOURCE_STATE=unknown
 LABEL org.opencontainers.image.version="v0.24.0-arm64" \
-      org.opencontainers.image.revision="392ec99651da78f6a8e1a2f60fe4818a95a8651d"
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      io.ragflow.source.state="${SOURCE_STATE}"
 
 # 用已构建的前端产物覆盖源码中的 dist 目录。
 COPY --from=builder /ragflow/web/dist /ragflow/web/dist

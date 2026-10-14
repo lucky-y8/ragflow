@@ -4,7 +4,8 @@ set -euo pipefail
 PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$PACKAGE_DIR/versions.env"
 BUILD_ROOT="$(realpath -m "${RAGFLOW_BUILD_DIR:-$PACKAGE_DIR/.build}")"
-SOURCE_DIR="$BUILD_ROOT/source"
+# 始终读取本脚本所在仓库的工作目录，包含尚未提交的修改和新增文件。
+SOURCE_DIR="$(cd "$PACKAGE_DIR/../../.." && pwd)"
 RESOURCE_DIR="$(realpath -m "${RAGFLOW_RESOURCE_DIR:-$BUILD_ROOT/resources}")"
 IMAGE="${RAGFLOW_IMAGE:-ragflow:v0.24.0-arm64}"
 BUILDER="${RAGFLOW_BUILDER:-ragflow-arm64-proxy}"
@@ -22,16 +23,22 @@ require_arm64() {
 }
 
 verify_source() {
-    if [[ ! -d "$SOURCE_DIR/.git" ]]; then
-        echo "缺少独立源码目录，请先执行 bash prepare.sh。" >&2
-        exit 1
-    fi
-    if [[ "$(git -c safe.directory="$SOURCE_DIR" -C "$SOURCE_DIR" rev-parse HEAD)" != "$RAGFLOW_COMMIT" ]]; then
-        echo "源码不是版本清单中的 v0.24.0 提交，停止构建。" >&2
-        exit 1
-    fi
-    if [[ -n "$(git -c safe.directory="$SOURCE_DIR" -C "$SOURCE_DIR" status --porcelain --untracked-files=normal)" ]]; then
-        echo "独立源码目录有修改，请使用新的 RAGFLOW_BUILD_DIR 重新准备；脚本不会重置已有修改。" >&2
+    local required_file
+    for required_file in pyproject.toml uv.lock web/package.json docker/entrypoint.sh docker/service_conf.yaml.template; do
+        if [[ ! -f "$SOURCE_DIR/$required_file" ]]; then
+            echo "当前仓库缺少 $required_file：$SOURCE_DIR；请同步完整仓库，不能只复制构建目录。" >&2
+            exit 1
+        fi
+    done
+    # 允许工作区修改，也允许没有 .git 的源码副本；仅防止误用其他版本。
+    if ! awk -v expected="$RAGFLOW_VERSION" '
+        /^[[:space:]]*\[/ { project = ($0 ~ /^[[:space:]]*\[project\][[:space:]]*(#.*)?$/) }
+        project && /^[[:space:]]*version[[:space:]]*=/ {
+            split($0, value, /["\047]/); matches = (value[2] == expected)
+        }
+        END { exit !matches }
+    ' "$SOURCE_DIR/pyproject.toml"; then
+        echo "当前仓库的 project.version 必须为 $RAGFLOW_VERSION，请确认使用 v0.24.0-arm64 分支。" >&2
         exit 1
     fi
 }

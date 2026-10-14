@@ -3,7 +3,7 @@ FROM ubuntu:24.04 AS base
 USER root
 SHELL ["/bin/bash", "-c"]
 
-ARG NEED_MIRROR=0
+ARG NEED_MIRROR=1
 
 WORKDIR /ragflow
 
@@ -171,10 +171,15 @@ RUN --mount=type=cache,id=ragflow_npm,target=/root/.npm,sharing=locked \
     export NODE_OPTIONS="--max-old-space-size=4096" && \
     cd web && npm install && npm run build
 
-COPY .git /ragflow/.git
+# Copy .git if it exists (for git-based builds)
+# For release builds without .git, use a default version
+RUN mkdir -p /ragflow/.git
 
-RUN version_info=$(git describe --tags --match=v* --first-parent --always); \
-    version_info="$version_info"; \
+RUN if [ -d /ragflow/.git ] && [ -f /ragflow/.git/HEAD ]; then \
+        version_info=$(cd /ragflow && git describe --tags --match=v* --first-parent --always 2>/dev/null || echo "unknown"); \
+    else \
+        version_info="infiniflow/ragflow:v0.24.0-release"; \
+    fi; \
     echo "RAGFlow version: $version_info"; \
     echo $version_info > /ragflow/VERSION
 

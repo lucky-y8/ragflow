@@ -38,8 +38,20 @@ if [[ ! "$download_concurrency" =~ ^[1-9][0-9]*$ || ! "$http_timeout" =~ ^[1-9][
     exit 1
 fi
 echo "Python 软件源：$pypi_mirror；下载并发：$download_concurrency；读取超时：${http_timeout}s"
+echo "应用源码：$SOURCE_DIR（包含未提交修改和新增文件；排除规则见 Dockerfile.dockerignore）"
+# Git 信息仅用于标识镜像，不决定复制内容；无 Git 的完整源码副本也能构建。
+source_revision=unknown
+source_state=unknown
+if command -v git >/dev/null && source_revision="$(git -c safe.directory="$SOURCE_DIR" -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null)"; then
+    source_state=clean
+    if [[ -n "$(git -c safe.directory="$SOURCE_DIR" -C "$SOURCE_DIR" status --porcelain --untracked-files=normal)" ]]; then
+        source_state=modified
+    fi
+else
+    source_revision=unknown
+fi
 docker buildx inspect "$BUILDER" --bootstrap
-# 主上下文是固定提交源码；packaging 是本目录，资源上下文替代在线依赖镜像。
+# 主上下文是当前完整工作目录；packaging 提供部署适配器，资源上下文提供下载缓存。
 docker buildx build --builder "$BUILDER" --platform linux/arm64 --provenance=false --load \
     --file "$PACKAGE_DIR/Dockerfile" --target production \
     --build-context "packaging=$PACKAGE_DIR" \
@@ -50,6 +62,8 @@ docker buildx build --builder "$BUILDER" --platform linux/arm64 --provenance=fal
     --build-arg "PYPI_MIRROR=$pypi_mirror" \
     --build-arg "PYTHON_DOWNLOAD_CONCURRENCY=$download_concurrency" \
     --build-arg "PYTHON_DOWNLOAD_TIMEOUT=$http_timeout" \
+    --build-arg "SOURCE_REVISION=$source_revision" \
+    --build-arg "SOURCE_STATE=$source_state" \
     "${proxy_args[@]}" --tag "$IMAGE" "$SOURCE_DIR"
 [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE")" == linux/arm64 ]]
 echo "镜像已构建：$IMAGE；下一步执行 bash smoke_test.sh。"

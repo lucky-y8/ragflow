@@ -179,6 +179,10 @@ test = [
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
+# ARM64 统一使用项目已有的 mini-racer，避免同名 py_mini_racer 模块被覆盖。
+[tool.uv]
+exclude-dependencies = ["akracer", "py-mini-racer"]
+
 [tool.setuptools]
 packages = [
     'agent',

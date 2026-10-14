@@ -1,6 +1,70 @@
-.git
-.venv
+# 主上下文是仓库根目录；未列出的源码、资源和新增业务目录都会复制。
+# 版本控制、编辑器、宿主机环境及构建缓存。
+**/.git
+**/.venv
 **/__pycache__
+**/*.pyc
 **/node_modules
+**/.build
+**/.cache
+**/.pytest_cache
+**/.ruff_cache
+**/.idea
+**/.vscode
+.local-dev
+.codex
+.agents
+.aws
+.ssh
+.kube
 web/dist
-*.log
+web/.umi
+web/.umi-production
+
+# 本机日志、会话、数据库及测试运行产物。
+**/logs
+**/*.log
+**/flask_session
+docker/data
+docker/ragflow-logs
+docker/oceanbase/conf
+docker/oceanbase/data
+docker/seekdb
+custom/backend_python/workspaces
+.coverage
+htmlcov
+coverage
+
+# 本地连接信息不能进入镜像；前端公开配置和无密码示例可以保留。
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.template
+!web/.env
+!web/.env.development
+!web/.env.production
+**/.npmrc
+# 保留仓库公开的前端 npm 源和 Node 引擎检查配置。
+!web/.npmrc
+**/.pypirc
+**/.netrc
+**/credentials.local.*
+**/local.service_conf.yaml
+**/local.service_conf.yaml.*
+custom/backend_python/**/k8s
+# 本版本的构建脚本在宿主机执行，runtime 通过 packaging 上下文单独打包。
+custom/backend_python/v0.24.0
+
+# 准备阶段下载的内容从独立资源上下文读取，不复制宿主机旧缓存或导出包。
+ragflow_deps
+rag/res/deepdoc
+huggingface.co
+nltk_data
+libssl*.deb
+tika-server*.jar*
+cl100k_base.tiktoken
+9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+chrome*.zip
+**/*.tar
+**/*.tar.gz
+**/*.sha256

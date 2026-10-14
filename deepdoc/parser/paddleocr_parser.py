@@ -202,7 +202,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
         self.api_url = api_url.rstrip("/") if api_url else os.getenv("PADDLEOCR_API_URL", "")
         self.access_token = access_token or os.getenv("PADDLEOCR_ACCESS_TOKEN")
         self.algorithm = algorithm
-        self.request_timeout = request_timeout
+        self.request_timeout = int(os.getenv("PADDLEOCR_REQUEST_TIMEOUT", request_timeout))
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Force PDF file type

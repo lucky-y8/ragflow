@@ -10,7 +10,7 @@ def check_mini_racer():
             version = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             continue
-        raise RuntimeError(f"发现冲突包 {package}=={version}：它会覆盖 mini-racer 的 py_mini_racer 模块。请使用本目录更新后的依赖锁文件重新构建镜像。")
+        raise RuntimeError(f"发现冲突包 {package}=={version}：它会覆盖 mini-racer 的 py_mini_racer 模块。请同步仓库根目录的 pyproject.toml 和 uv.lock，保留 ARM64 排除项后重新构建镜像。")
     version = importlib.metadata.version("mini-racer")
     assert version == "0.12.4", f"mini-racer 版本与锁文件不符：{version}"
 

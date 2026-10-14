@@ -425,3 +425,5 @@ RAGFlow 只有通过开源协作才能蓬勃发展。秉持这一精神,我们�
 <p align="center">
   <img src="https://github.com/infiniflow/ragflow/assets/7248/bccf284f-46f2-4445-9809-8f1030fb7585" width=50% height=50%>
 </p>
+C:\workspace\cbhb\ragflow\rag\utils\oss_conn.py
+C:\workspace\cbhb\ragflow\deepdoc\parser\paddleocr_parser.py

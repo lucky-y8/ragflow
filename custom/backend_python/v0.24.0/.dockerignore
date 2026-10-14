@@ -1,7 +1,6 @@
-.build
-.git
+# packaging 上下文仅用于 COPY runtime，避免把下载缓存和真实部署配置发送给 Builder。
+**
+!runtime
+!runtime/**
 **/__pycache__
-k8s
-tests
-*.tar
-*.tar.gz
+**/*.pyc
